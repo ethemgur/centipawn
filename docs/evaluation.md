@@ -149,6 +149,9 @@ rebuilds the progress state from the tree plus the stored accuracies.
   `PgnParser` can filter it out of exports.
 - **`OpeningService.detect(mainline)`** — longest-prefix SAN match against a
   hardcoded ~120-entry ECO table; returns `"C60: Ruy Lopez"` style strings or `null`.
+  `longestBookPrefix(sans)` runs the same match but returns the matched length; it
+  is the book fallback `RepertoireMatcher` uses when no repertoire file is loaded
+  (see [critical-moments.md](critical-moments.md)).
 - **Arrow filtering** — `ChessBoard._filterByWinProb` and the copy in
   `game_screen.dart` keep only alternatives within 10 pp of the best line's win
   probability, then fade/thin them by drop and rank.

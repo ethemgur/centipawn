@@ -14,6 +14,7 @@ automation that reminds you.
 | `MoveNode` / `MoveTree` / `GameEntry` fields | `docs/data-model.md`, plus CLAUDE.md if an invariant changed |
 | SQLite schema, `version`, `onUpgrade`, CRUD signatures | CLAUDE.md "Persistence", `docs/data-model.md` schema block |
 | PGN parsing or export behaviour | `docs/data-model.md` PGN section |
+| anything under `lib/services/critical_moments/`, or the scoring weights | `docs/critical-moments.md`, plus CLAUDE.md repository map if files moved |
 | screens, widgets, layout breakpoints, theme | `docs/ui-map.md`, CLAUDE.md "UI layout" |
 | files added/moved/deleted under `lib/` | CLAUDE.md repository map |
 | `pubspec.yaml` deps, SDK constraint, `dependency_overrides` | CLAUDE.md "Project" + "Conventions" |
