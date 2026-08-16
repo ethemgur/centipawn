@@ -57,7 +57,7 @@ Google sign-in, all via `AuthService`.
 | Widget | Notes |
 | --- | --- |
 | `ChessBoard` | Wraps chessground. Handles promotion via chessground's selector (`_pendingPromotion`), engine-suggestion arrows, and a drawing overlay when `boardEditModeProvider` is on (tap = circle, drag = arrow, written to `customShapesProvider`). Alternatives are filtered to within 10 pp win probability of the best line and faded/thinned by drop and rank. |
-| `StudyNotation` | Move-pair rows, variation blocks, sub-variations, comments and NAG glyphs; auto-scrolls the active node into view. Tapping a move calls `activeNodeProvider.setNode`. |
+| `StudyNotation` | Move-pair rows, variation blocks, sub-variations, comments and NAG glyphs; auto-scrolls the active node into view. Tapping a move calls `activeNodeProvider.setNode`. Comments render through `PgnParser.displayComments`, which hides `[%clk]`/`[%eval]`/`[%cal]` machine annotations; the edit dialog shows the raw text so editing cannot drop them. |
 | `EvalBar` | 24 px vertical bar. `evaluation` in pawns (White +), `mate`, `isFlipped`. Ratio is `0.5 + (eval/3)*0.45` clamped to 0.05–0.95; mate pins to an end. The score is printed on the leading side's section whenever it is non-zero once rounded to one decimal (so `0.1` shows; a level `0.0` and the pre-analysis default stay blank); mates show `M<n>`. |
 | `EvalChart` | Custom-painted line chart over the mainline, zero-line in the middle, quality markers. Renders **only after a completed review** (`reviewProvider.isCompleted`). Mates plot as ±10.0; a null eval repeats the previous point. |
 | `ResponsiveLayout` | Layout switch — see below. |

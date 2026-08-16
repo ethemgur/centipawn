@@ -136,7 +136,12 @@ when `getAllGames()` comes back empty, so they reappear after a schema reset.
 ### Parsing
 
 `parsePgn(pgn, {initialFen})` strips `[Tag "…"]` headers, tokenizes, and walks moves
-with dartchess. It handles:
+with dartchess. Header stripping is **anchored to whole lines**: a blanket
+`\[.*?\]` also eats the bracketed annotations inside comments — `[%clk]`,
+`[%eval]`, `[%cal]` — and `[%clk]` is the only record of how long a move took, which
+critical-moment time analysis runs on.
+
+It handles:
 
 - `(` / `)` variations — the current node and position are pushed, the walk resumes
   from the parent, and `)` pops.
@@ -148,6 +153,14 @@ with dartchess. It handles:
 
 `parseHeaders(pgn)` returns the tag map; `GameListNotifier.importFromPgn` uses it to
 build the `GameEntry`.
+
+Comments are stored raw, annotations included, so they survive export and stay
+readable by the clock parser. For display, `displayComment` / `displayComments`
+strip `[%…]` blocks and the internal `[eng]` marker and drop comments that were
+nothing else — an imported Lichess game carries a clock on every single move, and
+showing those would bury any real annotation. `StudyNotation` renders through those
+helpers; the comment *editor* deliberately shows the raw text, so editing a move
+cannot silently discard its clock.
 
 ### Exporting
 

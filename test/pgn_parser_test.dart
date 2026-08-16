@@ -45,6 +45,37 @@ void main() {
     });
   });
 
+  group('display filtering', () {
+    test('hides machine annotations but keeps the prose', () {
+      expect(PgnParser.displayComment('[%clk 0:03:00] good move'), 'good move');
+      expect(PgnParser.displayComment('[%eval 0.24] [%cal Ge2e4]'), '');
+      expect(PgnParser.displayComment('a plain comment'), 'a plain comment');
+    });
+
+    test('drops comments that were nothing but annotations', () {
+      // An imported Lichess game carries a clock on every single move; showing
+      // those in the notation would bury any real annotation.
+      expect(PgnParser.displayComments(['[%clk 0:03:00]']), isEmpty);
+      expect(PgnParser.displayComments(['[eng]']), isEmpty);
+      expect(
+        PgnParser.displayComments(['[%clk 0:03:00] the point', '[eng]']),
+        ['the point'],
+      );
+    });
+
+    test('an imported game with clocks shows no comment noise', () {
+      final tree = PgnParser.parsePgn(
+        '1. e4 {[%clk 0:03:00]} e5 {[%clk 0:02:58] surprising} *',
+      );
+      // Raw comments survive for export and clock parsing...
+      expect(tree.mainline.first.comments.single, '[%clk 0:03:00]');
+      // ...but nothing is shown for the bare clock.
+      expect(PgnParser.displayComments(tree.mainline.first.comments), isEmpty);
+      expect(PgnParser.displayComments(tree.mainline[1].comments),
+          ['surprising']);
+    });
+  });
+
   group('round trip', () {
     test('parses variations and glyphs', () {
       final tree = PgnParser.parsePgn('1. e4 e5 2. Nf3 (2. Bc4 Nc6) 2... Nc6 *');

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/move_node.dart';
 import '../providers/study_provider.dart';
 import '../services/engine_types.dart';
+import '../services/pgn_parser.dart';
 import '../theme.dart';
 
 class StudyNotation extends ConsumerStatefulWidget {
@@ -179,7 +180,8 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
       );
     }
 
-    final hasWhiteComment = pair.whiteNode.comments.isNotEmpty;
+    final whiteComments = PgnParser.displayComments(pair.whiteNode.comments);
+    final hasWhiteComment = whiteComments.isNotEmpty;
     final hasWhiteVariations = pair.whiteVariations.isNotEmpty;
     final splitWhiteBlack =
         (hasWhiteComment || hasWhiteVariations) && pair.blackSan != null;
@@ -189,8 +191,7 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
       widgets.add(buildRow(
           pair.whiteNode, pair.whiteSan, null, null, false, true));
       if (hasWhiteComment) {
-        widgets.add(
-            _InlineCommentBlock(text: pair.whiteNode.comments.join('\n')));
+        widgets.add(_InlineCommentBlock(text: whiteComments.join('\n')));
       }
       // White variations sit between the white and black rows.
       widgets.addAll(pair.whiteVariations.map(
@@ -202,16 +203,17 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
       widgets.add(buildRow(pair.whiteNode, pair.whiteSan, pair.blackNode,
           pair.blackSan, false, pair.blackSan == null));
       if (hasWhiteComment) {
-        widgets.add(
-            _InlineCommentBlock(text: pair.whiteNode.comments.join('\n')));
+        widgets.add(_InlineCommentBlock(text: whiteComments.join('\n')));
       }
       widgets.addAll(pair.whiteVariations.map(
           (v) => _buildVariationBlock(v, activeNode, ref, context, 0)));
     }
 
-    if (pair.blackNode != null && pair.blackNode!.comments.isNotEmpty) {
-      widgets.add(
-          _InlineCommentBlock(text: pair.blackNode!.comments.join('\n')));
+    final blackComments = pair.blackNode == null
+        ? const <String>[]
+        : PgnParser.displayComments(pair.blackNode!.comments);
+    if (blackComments.isNotEmpty) {
+      widgets.add(_InlineCommentBlock(text: blackComments.join('\n')));
     }
 
     widgets.addAll(pair.blackVariations.map(
@@ -353,8 +355,7 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
       widgets.add(_buildVariationMoveChip(node, activeNode, ref, context));
 
       // Comment after this move
-      final visibleComments =
-          node.comments.where((c) => c != '[eng]').toList();
+      final visibleComments = PgnParser.displayComments(node.comments);
       if (visibleComments.isNotEmpty) {
         widgets.add(_varComment(visibleComments.join(' ')));
       }

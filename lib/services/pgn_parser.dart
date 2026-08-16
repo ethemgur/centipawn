@@ -10,6 +10,25 @@ class PgnParser {
   static const String startFen =
       'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
+  /// Human-readable part of a PGN comment: the `[%clk ...]`, `[%eval ...]`,
+  /// `[%cal ...]` machine annotations removed.
+  ///
+  /// Those are kept in `MoveNode.comments` so they survive export and so
+  /// clock-based analysis can read them, but they are noise on screen — an
+  /// imported Lichess game carries one on every single move.
+  static String displayComment(String comment) => comment
+      .replaceAll(RegExp(r'\[%[^\]]*\]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+
+  /// [displayComment] applied to a node's comments, dropping the ones that
+  /// were nothing but annotations and the internal `[eng]` marker.
+  static List<String> displayComments(Iterable<String> comments) => [
+        for (final c in comments)
+          if (c != '[eng]')
+            if (displayComment(c).isNotEmpty) displayComment(c)
+      ];
+
   static MoveTree parsePgn(String pgn, {String initialFen = startFen}) {
     final tree = MoveTree(initialFen: initialFen);
 
