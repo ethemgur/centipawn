@@ -35,10 +35,16 @@ doesn't get every evaluation sign-flipped.
    mating move looks like it threw away a won game.
 2. **Cloud** — `CloudEvalService.evaluateBest(fen)`. Typically depth 30–99, <100 ms
    for cached positions.
-3. **Local engine** — only if `engine.isAvailable`; `evaluatePosition(fen, depth:)`
-   at the user's review depth.
-4. **`null`** — nothing could evaluate it (the common case on web for uncached
-   middlegame positions).
+3. **Local engine** — `await engine.ensureReady()` (which lazily loads the wasm
+   module on web) then `evaluatePosition(fen, depth:)` at the user's review depth.
+   That call returns `EngineEvaluation?` and yields **null** rather than a 0.00
+   placeholder when nothing evaluated the position. Review depth is capped at 12
+   on web, where the engine is single-threaded wasm.
+4. **`null`** — nothing could evaluate it: no engine on this platform
+   (Windows/macOS/Linux today), or one that failed to load.
+
+Web used to stop at step 2, leaving every cloud miss unevaluated. It now has a
+real engine, so step 3 applies there too — slower, but actually evaluated.
 
 A `null` eval is load-bearing. The node keeps `evaluation`/`mate`/`quality` null, the
 "previous eval" chain is broken (`prevCpWhite = null`), and the counter in

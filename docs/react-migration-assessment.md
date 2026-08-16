@@ -73,9 +73,9 @@ rewrite.
 
 Cheaper moves that address the same complaints:
 
-- **Trim the web payload.** `web/sqflite_sw.js` (800 KB) is deployed but never
-  loaded — the app uses `databaseFactoryFfiWebNoWebWorker`. The four
-  `canvaskit/*.js.symbols` files are ~5.8 MB of debug symbol maps. The service
+- **Trim the web payload.** (`web/sqflite_sw.js`, 800 KB and never loaded, is
+  already gone.) The four `canvaskit/*.js.symbols` files are ~5.8 MB of debug
+  symbol maps. The service
   worker precaches ~27 MB of CanvasKit variants a given client never fetches;
   `--pwa-strategy=none` or `--no-web-resources-cdn` are levers worth measuring.
 - **Add a desktop transport** so the engine works on all six targets.
