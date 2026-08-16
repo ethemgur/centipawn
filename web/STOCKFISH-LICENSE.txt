@@ -1,0 +1,42 @@
+Stockfish.js — Stockfish compiled to WebAssembly
+================================================
+
+Files:
+  stockfish-18-lite-single.js
+  stockfish-18-lite-single.wasm
+
+These are unmodified build artifacts of Stockfish.js 18, redistributed here so
+the web build can analyse positions locally.
+
+  Stockfish.js  https://github.com/nmrugg/stockfish.js
+  Stockfish     https://github.com/official-stockfish/Stockfish
+
+Copyright (C) 2004-2026 The Stockfish developers
+(T. Romstad, M. Costalba, J. Kiiski, G. Linscott and contributors).
+Stockfish.js (c) Chess.com, LLC. Neural network by Linmiao Xu (linrock).
+
+Licence
+-------
+
+Stockfish and Stockfish.js are free software: you can redistribute them and/or
+modify them under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.
+
+They are distributed in the hope that they will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+The full text of the GNU General Public License version 3 is available at:
+
+  https://www.gnu.org/licenses/gpl-3.0.txt
+
+Corresponding source
+--------------------
+
+The complete corresponding source for these binaries is available at the
+upstream repositories linked above. The artifacts here are unmodified releases
+from https://github.com/nmrugg/stockfish.js/releases/tag/v18.0.0.
+
+Note: the native (Android/iOS) builds of this app already ship Stockfish via
+the `stockfish` pub package, so this is the same obligation, not a new one.

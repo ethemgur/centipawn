@@ -46,7 +46,7 @@ gameListProvider ──(user taps a game)──► selectedGameProvider
                                               │            persists tree + accuracies
                                               ▼
                                      criticalMomentsProvider ──► ranked decision points
-                                       (native only: needs runSearch)
+                                       (needs runSearch; web runs shallower)
 ```
 
 Supporting state: `engineRunningProvider` (live analysis on/off, default **true**;
@@ -99,90 +99,77 @@ the tree in place does **not** notify listeners. Two helpers exist for this:
 
 ## Engine layer
 
-### Native (`engine_service_native.dart`)
+One `EngineService` for every platform. The UCI protocol is shared
+(`uci_engine.dart`); only the transport differs.
 
-Wraps the `stockfish` pub package.
+```
+EngineService ──► UciEngine (protocol: guards, barriers, parsers, queue)
+                      │
+                      ▼
+                 UciTransport            ← the only platform-specific part
+                   ├─ NativeUciTransport  stockfish pub package (FFI), Android/iOS
+                   └─ WebUciTransport     Web Worker + stockfish-18-lite-single.wasm
+```
 
-- On `StockfishState.ready`: `uci`, `Threads` = 3 (or 2 on <6-core devices — more
-  triggers thermal throttling on phones), `Hash 256`, `MultiPV 3`, `ucinewgame`,
-  `isready`. A FEN requested before ready is stashed in `_pendingFen` and replayed.
-- `analyzePosition(fen)` — infinite search for live analysis. Every call bumps
-  `_searchGeneration`; info lines whose generation doesn't match
-  `_activeSearchGeneration` are dropped. Without this, the tail Stockfish flushes
-  after `stop` leaks the previous position's eval into the new one. The call also
-  emits an empty batch on the stream, sends `stop`, waits for `readyok` (2 s timeout),
-  then `setoption MultiPV 1` + `position fen` + `go infinite`, recording the FEN in
-  `_analyzingFen` so every emitted batch is tagged with the position it describes.
-- `evaluatePosition(fen, depth:)` — one-shot depth-limited search used by the review.
-  Completes on `bestmove`, and only when `_expectingBestmove` is set, so the
-  `bestmove` emitted by a `stop` doesn't resolve the wrong future.
-- Parsed `info` lines become `EngineEvaluation(scoreCp /* pawns */, mate, pv, depth)`
-  keyed by `multipv` index and pushed to `evaluationStream` sorted by index, wrapped
-  in a `PositionEvals(fen, evals)`.
-- `runSearch(fen, depth:, multiPv:)` — the analysis-grade search used by
-  critical-moment detection. Bounded depth, MultiPV, and a `bestByDepth` map of the
-  best move at each completed iteration (`upperbound`/`lowerbound` lines skipped:
-  they are unresolved and would read as the engine changing its mind). Calls are
-  serialised through a queue, since one process answers one search at a time, and
-  bounded by a 90 s timeout that returns whatever depth was reached — a wedged
-  search would otherwise stall an entire game sweep with no symptom.
-  Returns a `SearchResult`; see [critical-moments.md](critical-moments.md).
+### The protocol (`uci_engine.dart`)
 
-Note `analyzePosition` sets `MultiPV 1` even though init sets 3; the multi-line
-arrows on the board come from whatever the current setting yields plus the cloud
-provider's `multiPv: 3`.
+- Handshake on first use: `uci`, `setoption Threads/Hash` (values from the
+  transport), `setoption MultiPV 3`, `ucinewgame`, `isready`. Guarded by one
+  completer so concurrent callers share a single load, with a 20 s timeout —
+  the backstop that catches failure modes nothing else predicts.
+- `analyzePosition(fen)` — infinite search for live analysis. Bumps
+  `_searchGeneration`; info lines whose generation doesn't match are dropped,
+  or the tail flushed after `stop` leaks the previous position's eval into the
+  new one. Emits an empty `PositionEvals` tagged with the new FEN first, so the
+  previous position clears without this one being claimed.
+- `evaluatePosition(fen, depth:)` — one-shot depth-limited search, used by the
+  review. Completes on `bestmove`, and only when `_expectingBestmove` is set, so
+  the `bestmove` from a `stop` can't resolve the wrong future. Returns **null**
+  when nothing evaluated the position — never a 0.00 placeholder.
+- `runSearch(fen, depth:, multiPv:)` — the analysis-grade search behind
+  critical-moment detection. MultiPV plus `bestByDepth`, the best move at each
+  completed iteration (`upperbound`/`lowerbound` lines skipped — they are
+  unresolved and would read as the engine changing its mind). Serialised through
+  a queue, bounded by a 90 s timeout that returns whatever depth was reached.
 
-### Web (`engine_service_web.dart`)
+### Transports
 
-A stub. No Stockfish ships with the web build: `isAvailable`/`isReady` are `false`,
-`analyzePosition` and `stop` do nothing, `evaluatePosition` returns `scoreCp: 0`,
-`runSearch` throws `StateError`, and `evaluationStream` **never emits**. Callers **must** check `isAvailable` before
-trusting a score — `ReviewNotifier._fetchEval` does exactly that and returns `null`
-instead — and must never gate the display of an eval on the local stream having
-produced something, or the whole feature silently disappears on web. (That was a
-real bug: the eval bar and the suggested-lines box were dead on web while the board
-arrows, which read `combinedEvalProvider` directly, worked fine.)
+**Native** (`uci_transport_native.dart`) wraps the `stockfish` pub package.
+`isSupported` is **Android and iOS only** — the package ships plugin code for
+those two and falls back to `DynamicLibrary.process()` elsewhere, where the
+symbol lookup throws. Threads: 3 (2 on <6-core devices — more triggers thermal
+throttling on phones). Hash: 256 MB.
 
-### Cloud (`cloud_eval_service.dart`)
+**Web** (`uci_transport_web.dart`) runs `stockfish-18-lite-single` in a Web
+Worker. Threads 1, Hash 32 MB (bounded wasm heap; mobile Safari kills tabs that
+grow it). The single-threaded build is what keeps this simple: the
+multi-threaded one needs `SharedArrayBuffer` → cross-origin isolation → which
+would break CanvasKit loading from gstatic and sever popup OAuth via
+`COOP: same-origin`. **No response headers are needed.**
 
-`GET https://lichess.org/api/cloud-eval?fen=…&multiPv=…`, 5 s timeout.
+Loading is lazy: the 7.3 MB module is fetched on first analysis, not at startup.
+Three independent guards make a failure loud rather than a hang — the wasm magic
+bytes are checked before the worker is spawned (the hosting SPA rewrite answers
+a missing file with `index.html` at HTTP 200), `Worker.onerror` catches a bad
+script, and the handshake timeout catches everything else. Failures are sticky
+and carry a message written for a person.
 
-- Returns `null` on 404 (not cached), 429, any non-200, depth `< 20`, or any parse
-  or network error. Callers fall back.
-- Lichess reports White-POV scores; the service flips them to **side-to-move POV**
-  so the result is a drop-in replacement for a local `EngineEvaluation`. `scoreCp`
-  is converted to pawns.
-- No explicit throttle: during review every cache miss falls through to a
-  multi-second local search, which naturally keeps requests under ~1/s.
+It must be a **classic** worker: the glue calls `importScripts`, which does not
+exist in `type: "module"` workers.
 
-### Merging local + cloud
-
-Both sources hand back a **`PositionEvals(fen, evals)`** — the evals plus the FEN
-they were computed for. That tagging is what makes staleness checkable: a
-`FutureProvider` keeps serving its previous value while it reloads, and a stream
-keeps its last event until the next one arrives, so either source can otherwise hand
-back the previous position's numbers after the user has already moved on.
-
-`combinedEvalProvider` watches both, discards whichever does not match
-`activeNodeProvider`'s FEN, and of the rest returns the one with the greater `depth`
-— as a plain `List<EngineEvaluation>`, empty when nothing has evaluated the current
-position. In practice the local engine fills the first few hundred milliseconds, the
-cloud result (depth 30+) takes over when it lands, and the local engine wins again if
-it out-searches it. **On web the cloud is the only source**, so nothing downstream may
-require the local stream to have emitted.
-
-Because a non-empty result is by construction for the current position, widgets can
-render it directly — there is no separate freshness flag to consult. Anything that
-needs "is this eval for the board I'm showing?" should compare FENs, via
-`PositionEvals.matches(fen)`.
+The artifacts are committed under `web/` and copied verbatim by
+`flutter build web`, the same route `web/sqlite3.wasm` takes.
+`test/engine/web_assets_test.dart` pins their sizes and magic bytes so a missing
+file fails the build rather than production. Stockfish is GPL-3.0; see
+`web/STOCKFISH-LICENSE.txt`.
 
 ## Platform-conditional files
 
 Two conditional exports select an implementation at compile time:
 
 ```dart
-// services/engine_service.dart
-export 'engine_service_native.dart' if (dart.library.js_interop) 'engine_service_web.dart';
+// services/uci_transport.dart
+export 'uci_transport_native.dart' if (dart.library.js_interop) 'uci_transport_web.dart';
 
 // services/database_factory_setup.dart
 export 'database_factory_setup_native.dart' if (dart.library.js_interop) 'database_factory_setup_web.dart';

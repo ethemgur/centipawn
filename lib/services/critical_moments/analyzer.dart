@@ -72,11 +72,18 @@ class CriticalMomentAnalyzer {
     int deepDepth = kDeepDepth,
     void Function(AnalysisProgress)? onProgress,
   }) async {
-    if (!engine.isAvailable) {
+    if (!engine.isSupported) {
       throw StateError(
         'Critical-moment analysis needs a local engine; none is available '
         'on this platform.',
       );
+    }
+    // Loading is lazy — on web this fetches the wasm module. A failure here
+    // carries the real reason (missing asset, blocked worker) rather than a
+    // generic message.
+    if (!await engine.ensureReady()) {
+      throw StateError(engine.unavailableReason ??
+          'The chess engine could not be started.');
     }
 
     final analysable = plies.where((p) => !p.inBook).toList();

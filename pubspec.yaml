@@ -50,6 +50,9 @@ dependencies:
   http: ^1.2.2
   font_awesome_flutter: ^10.8.0
   sqflite_common_ffi_web: ^1.1.1
+  # Direct dependency because lib/services/uci_transport_web.dart imports it
+  # for Worker/fetch interop. dart2wasm rules out dart:html and package:js.
+  web: ^1.1.1
 
 dependency_overrides:
   # Vendored copy of dartchess 0.12.3 with _popcnt64() patched to avoid

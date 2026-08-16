@@ -39,9 +39,23 @@ const double kStageAAbsoluteThreshold = 0.05;
 /// ...or if it lands in the top slice of the game by preliminary spread.
 const double kStageAPercentile = 0.20;
 
+/// Native search depths, and the depths every tuned constant above was
+/// reasoned against.
 const int kShallowDepth = 15;
-const int kShallowMultiPv = 3;
 const int kDeepDepth = 28;
+
+/// Web search depths. The single-threaded wasm build with a 32 MB hash is
+/// roughly an order of magnitude slower than the native NNUE build, so 15/28
+/// would turn a 40-move game into a multi-minute freeze in the browser.
+///
+/// Results at these depths are genuinely noisier — depth-to-settle is measured
+/// over a shorter range and Stage A flags a slightly different set of plies —
+/// so the UI reports which depths produced a report rather than letting a web
+/// run pass for a native one.
+const int kShallowDepthWeb = 12;
+const int kDeepDepthWeb = 20;
+
+const int kShallowMultiPv = 3;
 const int kDeepMultiPv = 5;
 
 // ---------------------------------------------------------------------------

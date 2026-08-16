@@ -41,6 +41,8 @@ class CriticalMoments {
     String initialFen = kStartFen,
     int incrementSec = 0,
     SearchCache? cache,
+    int shallowDepth = kShallowDepth,
+    int deepDepth = kDeepDepth,
     void Function(AnalysisProgress)? onProgress,
   }) async {
     final plies = PlyBuilder.fromMainline(
@@ -51,7 +53,13 @@ class CriticalMoments {
     );
 
     final analyzer = CriticalMomentAnalyzer(engine: engine, cache: cache);
-    await analyzer.analyze(plies, userSide, onProgress: onProgress);
+    await analyzer.analyze(
+      plies,
+      userSide,
+      shallowDepth: shallowDepth,
+      deepDepth: deepDepth,
+      onProgress: onProgress,
+    );
 
     return CriticalMomentScorer(config: config).score(plies, userSide);
   }

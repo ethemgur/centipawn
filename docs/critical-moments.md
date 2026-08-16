@@ -48,13 +48,28 @@ duration, because it and this share one engine process.
 
 Needs `EngineService.runSearch(fen, depth:, multiPv:)` — MultiPV output *plus*
 the best move at every completed iterative-deepening depth. The Lichess
-cloud-eval endpoint exposes neither, so **this feature is native-only**;
-`analyze()` throws `StateError` when `engine.isAvailable` is false rather than
-degrading into something that looks like analysis.
+cloud-eval endpoint exposes neither, so this needs a **real engine**:
 
-On web that surfaces as `CriticalMomentsState.unavailableReason`, and the box
-says so in as many words. An empty list there would read as "this game had no
-critical moments", which is a different and false claim.
+| Platform | Status |
+| --- | --- |
+| Android, iOS | Stockfish via FFI, full depths |
+| Web | Stockfish WASM in a Worker, **reduced depths** (Stage A 12, Stage B 20) |
+| Windows, macOS, Linux | no engine yet — `isSupported` is false |
+
+`analyze()` throws `StateError` when no engine can run or when one fails to
+load, carrying the real reason; that surfaces as
+`CriticalMomentsState.unavailableReason` and the box says so in as many words.
+An empty list would read as "this game had no critical moments", which is a
+different and false claim.
+
+Web depths come from `kShallowDepthWeb`/`kDeepDepthWeb` and are threaded through
+`CriticalMoments.run` from `criticalMomentsProvider` — deliberately *not* from
+`critical_types.dart`, which imports neither Flutter nor the engine so that
+`tool/validate_critical_moments.dart` still runs under a plain `dart run`.
+`CriticalMomentsState` carries the depths and `_CriticalMomentsBox` prints them
+(`as White · depth 12/20`), so a web report is never mistaken for a native one.
+Results at web depths are genuinely noisier: depth-to-settle is measured over a
+shorter range and Stage A flags a slightly different set of plies.
 
 A single search is bounded by a 90 s timeout that returns whatever depth was
 reached. Without it a wedged engine stalls the whole sweep with no symptom

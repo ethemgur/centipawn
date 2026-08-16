@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 Centipawn is a Flutter chess study/analysis app. It imports PGN games, plays them
 out on an interactive board, evaluates positions (Lichess cloud eval first, local
-Stockfish as fallback), and runs a "game review" that classifies every mainline
+Stockfish as fallback — native via FFI, web via WebAssembly), and runs a "game review" that classifies every mainline
 move and computes per-side accuracy. State is Riverpod; games and their move trees
 are persisted in a local SQLite database via `sqflite`.
 
@@ -26,11 +26,11 @@ left unmerged has not shipped, no matter how complete the work looks.
 ```
 flutter pub get                       # install deps
 flutter run                           # default device
-flutter run -d chrome                 # web (engine_service_web.dart, sqlite3-wasm)
-flutter run -d windows                # native desktop (engine_service_native.dart)
+flutter run -d chrome                 # web (Stockfish wasm worker, sqlite3-wasm)
+flutter run -d windows                # desktop — note: no chess engine there yet
 flutter analyze                       # lint / static analysis (flutter_lints)
 dart format lib                       # formatting; there is no separate format step
-flutter test                          # unit tests (Stage C of critical moments, PGN parsing)
+flutter test                          # unit tests (UCI protocol, Stage C, PGN, web assets)
 flutter build apk|ios|web|windows     # production builds
 flutter build web --wasm --release    # what CI builds
 ```
@@ -48,8 +48,12 @@ lib/
   providers/
     study_provider.dart      ALL app state (~970 lines, single source of truth)
   services/
-    engine_service.dart      conditional re-export: native | web
-    engine_service_native.dart / _web.dart / engine_types.dart
+    engine_service.dart      single EngineService over UciEngine + transport
+    uci_engine.dart          the whole UCI protocol, platform-neutral
+    uci_transport.dart       conditional export: native | web
+    uci_transport_native.dart / _web.dart   stockfish FFI | Web Worker + wasm
+    stockfish_web_assets.dart  names/sizes of the committed web/ artifacts
+    engine_types.dart        EngineEvaluation, PositionEvals, PvLine, SearchResult
     cloud_eval_service.dart  Lichess /api/cloud-eval client
     move_evaluator.dart      win-probability math + move classification
     best_line_annotator.dart attaches engine PV as a variation
@@ -61,6 +65,8 @@ lib/
   screens/                   game_list, game, settings, login
   widgets/                   chess_board, study_notation, eval_bar, eval_chart,
                              responsive_layout, edit_game_metadata_dialog
+web/                         index.html + committed wasm blobs (sqlite3,
+                             stockfish-18-lite-single.{js,wasm})
 packages/dartchess/          vendored dartchess 0.12.3 (dependency_overrides)
 test/                        unit tests; critical_moments/data holds JSON fixtures
 tool/                        validate_critical_moments.dart, capture_critical_fixture.dart
@@ -80,36 +86,53 @@ Read the relevant one before changing that area; keep them current (see
 | [docs/ui-map.md](docs/ui-map.md) | Screens, widgets, responsive layout, theming |
 | [docs/critical-moments.md](docs/critical-moments.md) | Critical-moment detection: stages, components, gates, time regression |
 | [docs/documentation-maintenance.md](docs/documentation-maintenance.md) | What to update when, and how the doc hooks work |
+| [docs/react-migration-assessment.md](docs/react-migration-assessment.md) | Whether to port to React/TS, and what would change the answer |
 
 ## Architecture essentials
 
-### Engine abstraction (conditional import)
+### Engine abstraction
 
-`lib/services/engine_service.dart` picks the platform implementation at compile
-time:
+There is **one** `EngineService` for every platform (`lib/services/engine_service.dart`).
+The UCI protocol lives in `lib/services/uci_engine.dart` and is shared; only the
+*transport* is platform-specific, picked by a conditional export:
 
 ```dart
-export 'engine_types.dart';
-export 'engine_service_native.dart' if (dart.library.js_interop) 'engine_service_web.dart';
+// services/uci_transport.dart
+export 'uci_transport_native.dart' if (dart.library.js_interop) 'uci_transport_web.dart';
 ```
 
-Both expose the same API: `evaluationStream` (of `PositionEvals`),
+A `UciTransport` is just `isSupported` / `start()` / `send(String)` / `lines` /
+`threads` / `hashMb` / `dispose()`. Everything subtle — search-generation guards,
+the `readyok` barrier, `bestmove` discrimination, MultiPV assembly, `bestByDepth`
+capture, the search queue and timeouts — is in `UciEngine` and shared. There used
+to be two copies of that logic and they had already drifted (`analyzePosition`
+returned `Future<void>` on one platform and `void` on the other). Adding a
+platform now costs one transport and no protocol code.
+
+`EngineService` exposes `evaluationStream` (of `PositionEvals`), `ensureReady()`,
 `analyzePosition(fen)`, `evaluatePosition(fen, depth:)`, `runSearch(fen, depth:,
-multiPv:)`, `isReady`, `isAvailable`, `stop()`, `dispose()`. Shared types live in
-`engine_types.dart`. Change **both** implementations together.
+multiPv:)`, `isSupported`, `isReady`, `unavailableReason`, `stop()`, `dispose()`.
 
-`runSearch` is the analysis-grade search: bounded depth, MultiPV, and a
-`bestByDepth` map of the best move at every completed iteration. Calls are
-serialised — one process answers one search at a time. The web stub throws
-`StateError`, because the cloud endpoint exposes neither MultiPV nor per-depth
-best moves and there is nothing honest to fall back to.
+**Two score units, on purpose.** `EngineEvaluation.scoreCp` is in **pawns** (the
+eval bar and `combinedEvalProvider` consume them); `PvLine.scoreCp` is in **raw
+centipawns** (`PvLine.normalisedCp` folds mate onto a centipawn scale). Both are
+pinned by `test/engine/uci_engine_test.dart` — getting it wrong makes the eval
+bar read 100x off.
 
-The **web implementation is a no-op stub**: `isAvailable == false`,
-`evaluatePosition` returns a placeholder 0.00, and `evaluationStream` never emits.
-On web the only real evaluation source is `CloudEvalService`. Never treat a score
-from an engine with `isAvailable == false` as analysis — and never make the display
-of an eval conditional on the local stream having emitted, or the feature dies
-silently on web while working on mobile.
+**Engine availability is not uniform:**
+
+| Platform | Engine |
+| --- | --- |
+| Android, iOS | Stockfish via FFI (`stockfish` pub package) |
+| Web | Stockfish 18 WASM in a Web Worker, lazily loaded on first use |
+| Windows, macOS, Linux | **none yet** — the `stockfish` package ships plugin code for android/ios only, so `isSupported` is false |
+
+Loading is lazy on web (7.3 MB), so `isSupported` means "an engine can run here",
+not "an engine is loaded". Await `ensureReady()` before treating a result as
+analysis; it returns false and sets `unavailableReason` when the engine cannot
+start. `evaluatePosition` returns **null** rather than a fabricated 0.00.
+
+Web searches shallower than native — see `docs/critical-moments.md`.
 
 ### Move tree, not a move list
 

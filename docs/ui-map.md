@@ -33,8 +33,11 @@ Structure:
 - `_EngineAnalysisBox` — `ConsumerStatefulWidget` rendering `combinedEvalProvider`
   lines (always for the current position — the provider FEN-matches for you).
 - `_CriticalMomentsBox` — top critical moments after an analyse run, or the
-  reason there are none (on web: no local engine). Tapping a row jumps to that
-  ply. See [critical-moments.md](critical-moments.md).
+  reason there are none (no engine on this platform, or one that failed to
+  load). Tapping a row jumps to that ply. The subtitle names the analysed side
+  and, when the depths were reduced, the depths used (`as White · depth 12/20`)
+  so a web report is never mistaken for a native one.
+  See [critical-moments.md](critical-moments.md).
 - `_NotationPanel` — wraps `StudyNotation` and `EvalChart`.
 - `_GameBottomBar`, `_RepeatNavButton` (press-and-hold repeat for move stepping),
   `_ReviewProgressToast`, `_PlayerBar`, `_AccuracyBadge`, `_BoardEditToolbar`,

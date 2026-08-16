@@ -1,4 +1,6 @@
+import 'dart:math' as math;
 import 'dart:math' show exp;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart' show Color, Colors;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -604,7 +606,10 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
     final cloud = await CloudEvalService.evaluateBest(fen);
     if (cloud != null) return cloud;
 
-    if (!engine.isAvailable) return null;
+    // Loads the engine on first use. On web this is where the review stops
+    // leaving cloud-miss positions unevaluated — at the cost of a real search
+    // per miss, which is why the web review depth is capped below.
+    if (!await engine.ensureReady()) return null;
     return engine.evaluatePosition(fen, depth: localDepth);
   }
 
@@ -641,7 +646,10 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
       ref.read(engineRunningProvider.notifier).toggle();
     }
 
-    final depth = ref.read(reviewDepthProvider);
+    // The web engine is single-threaded wasm; at the slider's default of 16 a
+    // game with many cloud misses would sit for minutes with nothing visible.
+    final requestedDepth = ref.read(reviewDepthProvider);
+    final depth = kIsWeb ? math.min(requestedDepth, 12) : requestedDepth;
 
     state = ReviewProgress(
       total: mainline.length + 1,
@@ -953,9 +961,13 @@ final customShapesProvider =
 /// State of a critical-moment run.
 ///
 /// [unavailableReason] is set instead of [report] when the analysis cannot run
-/// at all — on web there is no Stockfish, and the cloud endpoint exposes
-/// neither MultiPV nor per-depth best moves, so there is nothing to fall back
-/// to. Surfacing it is better than an empty list that looks like "no moments".
+/// at all — no engine on this platform, or the engine failed to load. Surfacing
+/// it is better than an empty list, which would read as "this game had no
+/// critical moments" — a different and false claim.
+///
+/// [shallowDepth]/[deepDepth] are carried so the UI can attribute a report to
+/// the depths that produced it; web searches shallower than native and the
+/// results are correspondingly noisier.
 class CriticalMomentsState {
   final bool isRunning;
   final int completed;
@@ -970,6 +982,10 @@ class CriticalMomentsState {
   /// Side the report was produced for.
   final Side? analysedSide;
 
+  /// Depths the report was searched at.
+  final int shallowDepth;
+  final int deepDepth;
+
   const CriticalMomentsState({
     this.isRunning = false,
     this.completed = 0,
@@ -978,7 +994,13 @@ class CriticalMomentsState {
     this.report,
     this.unavailableReason,
     this.analysedSide,
+    this.shallowDepth = kShallowDepth,
+    this.deepDepth = kDeepDepth,
   });
+
+  /// True when this ran at the reduced web depths.
+  bool get isReducedDepth =>
+      shallowDepth < kShallowDepth || deepDepth < kDeepDepth;
 
   bool get hasReport => report != null;
 
@@ -1010,11 +1032,11 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
     final game = ref.read(selectedGameProvider);
     final side = _sideForUser(game);
 
-    if (!engine.isAvailable) {
+    if (!engine.isSupported) {
       state = CriticalMomentsState(
-        unavailableReason: 'Critical-moment analysis needs the local engine, '
-            'which the web build does not ship. Open this game in the desktop '
-            'or mobile app.',
+        unavailableReason:
+            'No chess engine is available on this platform yet. Open this '
+            'game on Android, iOS, or the web app.',
         analysedSide: side,
       );
       return;
@@ -1024,11 +1046,18 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
     final wasRunning = ref.read(engineRunningProvider);
     if (wasRunning) ref.read(engineRunningProvider.notifier).toggle();
 
+    // Web runs shallower — single-threaded wasm at native depths would take
+    // minutes. Recorded in state so a web report is never mistaken for native.
+    final shallowDepth = kIsWeb ? kShallowDepthWeb : kShallowDepth;
+    final deepDepth = kIsWeb ? kDeepDepthWeb : kDeepDepth;
+
     state = CriticalMomentsState(
       isRunning: true,
       total: mainline.length,
       stage: 'shallow',
       analysedSide: side,
+      shallowDepth: shallowDepth,
+      deepDepth: deepDepth,
     );
 
     try {
@@ -1036,6 +1065,8 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
         mainline,
         side,
         initialFen: tree.root.fen,
+        shallowDepth: shallowDepth,
+        deepDepth: deepDepth,
         onProgress: (p) {
           state = CriticalMomentsState(
             isRunning: true,
@@ -1043,13 +1074,28 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
             total: p.total,
             stage: p.stage,
             analysedSide: side,
+            shallowDepth: shallowDepth,
+            deepDepth: deepDepth,
           );
         },
       );
-      state = CriticalMomentsState(report: report, analysedSide: side);
-    } catch (e) {
       state = CriticalMomentsState(
-        unavailableReason: 'Critical-moment analysis failed: $e',
+        report: report,
+        analysedSide: side,
+        shallowDepth: shallowDepth,
+        deepDepth: deepDepth,
+      );
+    } catch (e) {
+      // Unwrap the diagnostics the engine layer raises. `$e` on a StateError
+      // prefixes "Bad state:", which is noise in front of a message already
+      // written for a person to read.
+      final reason = switch (e) {
+        StateError() => e.message,
+        EngineUnavailable() => e.reason,
+        _ => '$e',
+      };
+      state = CriticalMomentsState(
+        unavailableReason: reason,
         analysedSide: side,
       );
     } finally {

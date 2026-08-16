@@ -747,10 +747,16 @@ class _CriticalMomentsBox extends ConsumerWidget {
     }
 
     final side = state.analysedSide == Side.black ? 'Black' : 'White';
+    // Web searches shallower than native, so results are noisier. Say which
+    // depths produced this report rather than letting the two pass for each
+    // other.
+    final depths = state.isReducedDepth
+        ? ' · depth ${state.shallowDepth}/${state.deepDepth}'
+        : '';
 
     return _shell(
       context,
-      subtitle: 'as $side',
+      subtitle: 'as $side$depths',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
