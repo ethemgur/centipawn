@@ -143,6 +143,9 @@ Everything lives here. The providers that matter most:
   node's, then picks the higher depth. Its result is therefore always for the
   current position — widgets render it directly, with no freshness flag.
 - `reviewProvider` — the game review; see `docs/evaluation.md`.
+- `criticalMomentsProvider` — critical-moment detection; see
+  `docs/critical-moments.md`. Native-only (needs `runSearch`), so on web it sets
+  `unavailableReason` instead of a report.
 - `reviewDepthProvider`, `myNamesProvider` — persisted in `SharedPreferences`.
 - `customShapesProvider` — user circles/arrows keyed by `g<gameId>::<fen>`.
 - `boardFlippedProvider`, `boardEditModeProvider`, `drawColorProvider`,

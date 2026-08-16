@@ -11,6 +11,8 @@ import '../models/game_entry.dart';
 import '../models/move_node.dart';
 import '../providers/study_provider.dart';
 import '../services/engine_types.dart';
+import '../services/critical_moments/critical_moments.dart'
+    show CriticalMoment, TimeVerdict;
 import '../services/move_evaluator.dart';
 import '../widgets/chess_board.dart';
 import '../widgets/study_notation.dart';
@@ -148,7 +150,13 @@ class GameScreen extends ConsumerWidget {
                 onSelected: (action) {
                   switch (action) {
                     case _AppBarAction.analyse:
-                      ref.read(reviewProvider.notifier).startReview();
+                      // Review first (cloud-backed, quick), then the
+                      // critical-moment pass, which needs the local engine and
+                      // is much heavier.
+                      () async {
+                        await ref.read(reviewProvider.notifier).startReview();
+                        await ref.read(criticalMomentsProvider.notifier).run();
+                      }();
                     case _AppBarAction.export:
                       final shapes = ref
                           .read(customShapesProvider.notifier)
@@ -273,6 +281,7 @@ class _GameBody extends ConsumerWidget {
           if (!isFoldFlexMode) const _BoardEditToolbar(),
           // Engine suggested lines sit below the toolbar
           if (!isFoldFlexMode) const _EngineAnalysisBox(),
+              const _CriticalMomentsBox(),
           if (!isFoldFlexMode) const _SectionDivider(),
         ],
       ),
@@ -312,6 +321,7 @@ class _GameBody extends ConsumerWidget {
               _buildBoardToolbar(context, ref),
               const _BoardEditToolbar(),
               const _EngineAnalysisBox(),
+              const _CriticalMomentsBox(),
             ],
           ),
         ),
@@ -344,6 +354,7 @@ class _GameBody extends ConsumerWidget {
         _buildBoardToolbar(context, ref),
         const _BoardEditToolbar(),
         const _EngineAnalysisBox(),
+              const _CriticalMomentsBox(),
         Builder(
           builder: (context) {
             final bottomInset = MediaQuery.of(context).padding.bottom;
@@ -674,6 +685,191 @@ class _EngineAnalysisBoxState extends ConsumerState<_EngineAnalysisBox> {
         ],
       ),
     );
+  }
+}
+
+/// The top critical moments, or the reason there aren't any to show.
+///
+/// Separate from `_EngineAnalysisBox`: that one describes the position in front
+/// of you, this one describes the game as a whole.
+class _CriticalMomentsBox extends ConsumerWidget {
+  const _CriticalMomentsBox();
+
+  static const _rowHeight = 30.0;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(criticalMomentsProvider);
+
+    if (state.isRunning) {
+      return _shell(
+        context,
+        subtitle: state.stage == 'deep' ? 'deep pass' : 'scanning',
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: LinearProgressIndicator(
+            value: state.fraction == 0 ? null : state.fraction,
+            minHeight: 3,
+            backgroundColor: AppColors.divider,
+          ),
+        ),
+      );
+    }
+
+    if (state.unavailableReason != null) {
+      return _shell(
+        context,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: Text(
+            state.unavailableReason!,
+            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          ),
+        ),
+      );
+    }
+
+    final report = state.report;
+    if (report == null) return const SizedBox.shrink();
+
+    if (report.moments.isEmpty) {
+      return _shell(
+        context,
+        child: const Padding(
+          padding: EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: Text(
+            'No decision points stood out — every move was forced, book, or '
+            'already decided.',
+            style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          ),
+        ),
+      );
+    }
+
+    final side = state.analysedSide == Side.black ? 'Black' : 'White';
+
+    return _shell(
+      context,
+      subtitle: 'as $side',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final m in report.moments) _row(context, ref, m),
+        ],
+      ),
+    );
+  }
+
+  Widget _shell(BuildContext context,
+      {required Widget child, String? subtitle}) {
+    return Container(
+      color: AppColors.scaffoldBg,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              children: [
+                const Icon(Icons.crisis_alert,
+                    size: 13, color: AppColors.textSecondary),
+                const SizedBox(width: 5),
+                const Text(
+                  'Critical moments',
+                  style:
+                      TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                        fontSize: 10, color: AppColors.textSecondary),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _row(BuildContext context, WidgetRef ref, CriticalMoment m) {
+    final verdict = _verdictLabel(m.verdict);
+
+    return SizedBox(
+      height: _rowHeight,
+      child: InkWell(
+        onTap: () => _jumpTo(ref, m.ply),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 52,
+                child: Text(
+                  '${m.moveNumber}${m.side == Side.white ? '.' : '...'} '
+                  '${m.movePlayedSan}',
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 6),
+              // Criticality, not eval loss — a moment can rank high on a move
+              // that was played correctly.
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${m.criticalityPercentile.round()}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (verdict != null)
+                Expanded(
+                  child: Text(
+                    verdict.$1,
+                    style: TextStyle(fontSize: 10, color: verdict.$2),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                )
+              else
+                const Spacer(),
+              Icon(Icons.chevron_right,
+                  size: 14, color: AppColors.textSecondary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static (String, Color)? _verdictLabel(TimeVerdict v) => switch (v) {
+        TimeVerdict.blindSpot => ('moved fast here', Colors.red.shade600),
+        TimeVerdict.wasted => ('long think', Colors.orange.shade700),
+        TimeVerdict.productiveThink =>
+          ('thought, then banked it', Colors.green.shade700),
+        TimeVerdict.normal => null,
+      };
+
+  /// Walks the mainline to [ply] and selects that node.
+  void _jumpTo(WidgetRef ref, int ply) {
+    final mainline = ref.read(moveTreeProvider).mainline;
+    if (ply < 0 || ply >= mainline.length) return;
+    ref.read(activeNodeProvider.notifier).setNode(mainline[ply]);
   }
 }
 

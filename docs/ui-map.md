@@ -32,11 +32,15 @@ Structure:
 - `_BoardWithEval` — `EvalBar` + `ChessBoard` + `_PlayerBar`s.
 - `_EngineAnalysisBox` — `ConsumerStatefulWidget` rendering `combinedEvalProvider`
   lines (always for the current position — the provider FEN-matches for you).
+- `_CriticalMomentsBox` — top critical moments after an analyse run, or the
+  reason there are none (on web: no local engine). Tapping a row jumps to that
+  ply. See [critical-moments.md](critical-moments.md).
 - `_NotationPanel` — wraps `StudyNotation` and `EvalChart`.
 - `_GameBottomBar`, `_RepeatNavButton` (press-and-hold repeat for move stepping),
   `_ReviewProgressToast`, `_PlayerBar`, `_AccuracyBadge`, `_BoardEditToolbar`,
   `_ExportPgnDialog` (clean / annotated tabs → `PgnParser.exportPgn`), `_SectionDivider`.
-- `_AppBarAction` enum: `analyse` (starts `reviewProvider.startReview`), `export`.
+- `_AppBarAction` enum: `analyse` (runs `reviewProvider.startReview`, then
+  `criticalMomentsProvider.run`), `export`.
 - Free functions `_evalCpGs` / `_filterByWinProbGs` mirror the arrow-filtering logic
   in `ChessBoard`; `timeControlIcon` maps the time-control class to an icon.
 

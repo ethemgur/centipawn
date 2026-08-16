@@ -81,6 +81,10 @@ class EngineService {
   /// a single Stockfish process can only answer one at a time.
   Future<void> _searchQueue = Future<void>.value();
 
+  /// Upper bound on a single [runSearch]. Depth 28 on a phone is seconds, not
+  /// minutes; anything past this is a stuck process, not a slow one.
+  static const Duration _searchTimeout = Duration(seconds: 90);
+
   void _handleEngineOutput(String line) {
     final trimmed = line.trim();
     if (trimmed == 'readyok') {
@@ -278,7 +282,26 @@ class EngineService {
     _sendCommand('position fen $fen');
     _sendCommand('go depth $depth');
 
-    final raw = await completer.future;
+    // A search that never reports `bestmove` would hang the whole sweep with no
+    // symptom beyond a progress bar that stops moving. Cut it loose and keep
+    // whatever depth it did reach — a shallower result still scores.
+    final raw = await completer.future.timeout(
+      _searchTimeout,
+      onTimeout: () {
+        debugPrint('[Engine] runSearch timed out at depth $_multiPvMaxDepth');
+        _multiPvCompleter = null;
+        _sendCommand('stop');
+        final indices = _multiPvLines.keys.toList()..sort();
+        return SearchResult(
+          fen: fen,
+          depth: _multiPvMaxDepth,
+          pvs: [for (final i in indices) _multiPvLines[i]!],
+          legalMoveCount: legalMoveCount,
+          inCheck: position.isCheck,
+          bestByDepth: Map<int, String>.from(_multiPvBestByDepth),
+        );
+      },
+    );
     return SearchResult(
       fen: fen,
       depth: raw.depth,

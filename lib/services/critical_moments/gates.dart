@@ -156,7 +156,14 @@ class ZeroOutGates {
     final zeroed = <int>{};
     int? runMateDistance;
 
-    for (final ply in plies) {
+    // Walk the analysed side's plies only. Scores are from the side to move, so
+    // on the opponent's plies a winning mate reads as negative — walking every
+    // ply resets the run on each of them, and then every one of our own plies
+    // looks like a fresh entry into the net and nothing is ever suppressed.
+    final own = plies.where((p) => p.side == userSide).toList()
+      ..sort((a, b) => a.ply.compareTo(b.ply));
+
+    for (final ply in own) {
       final search = ply.best;
       final top = (search == null || search.pvs.isEmpty) ? null : search.pvs.first;
 
@@ -172,11 +179,9 @@ class ZeroOutGates {
         continue;
       }
       if (distance <= runMateDistance) {
-        if (ply.side == userSide) zeroed.add(ply.ply);
-        runMateDistance = distance;
-      } else {
-        runMateDistance = distance;
+        zeroed.add(ply.ply);
       }
+      runMateDistance = distance;
     }
     return zeroed;
   }

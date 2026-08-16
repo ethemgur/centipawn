@@ -33,6 +33,17 @@ while weights are tuned. Keep it that way: `analysed_game.dart`,
 `time_regression.dart` import neither Flutter nor the engine, which is what lets
 `tool/validate_critical_moments.dart` run under a plain `dart run`.
 
+## Where it runs from
+
+`criticalMomentsProvider` (in `study_provider.dart`) drives it. The game
+screen's **Analyse game** action runs the review first (cloud-backed, quick),
+then this pass. `_CriticalMomentsBox` under the board lists the top moments;
+tapping one jumps to that ply.
+
+The analysed side comes from `myNamesProvider` — whichever player the user
+identifies with, falling back to White. Live analysis is toggled off for the
+duration, because it and this share one engine process.
+
 ## Engine requirement
 
 Needs `EngineService.runSearch(fen, depth:, multiPv:)` — MultiPV output *plus*
@@ -40,6 +51,14 @@ the best move at every completed iterative-deepening depth. The Lichess
 cloud-eval endpoint exposes neither, so **this feature is native-only**;
 `analyze()` throws `StateError` when `engine.isAvailable` is false rather than
 degrading into something that looks like analysis.
+
+On web that surfaces as `CriticalMomentsState.unavailableReason`, and the box
+says so in as many words. An empty list there would read as "this game had no
+critical moments", which is a different and false claim.
+
+A single search is bounded by a 90 s timeout that returns whatever depth was
+reached. Without it a wedged engine stalls the whole sweep with no symptom
+beyond a progress bar that stops moving.
 
 `bestByDepth` is easy to lose: capture every `info depth N ... multipv 1 ... pv`
 line, not just the final depth. Recovering it means searching again.
@@ -102,6 +121,13 @@ the top decile and makes percentiles meaningless in forced-sequence-heavy games.
 | `forced:mate_execution` | best two lines are both mates of the same sign |
 | `forced:mate_run` | mate distance shrinking monotonically after the entry ply |
 
+`mateRunPlies` walks the **analysed side's plies only**. Scores are from the
+side to move, so on the opponent's plies a winning mate reads as negative;
+walking every ply resets the run on each of them, and then every one of our own
+plies looks like a fresh entry into the net and nothing is ever suppressed. That
+was a real bug — with the seeded games, all of which end in forced mates, the
+mating sequence filled the report.
+
 Two of these are classifiers rather than filters, on purpose:
 
 - **Recapture.** One recapturer but the engine prefers something else means a
@@ -160,8 +186,9 @@ Sicilian slugfest have completely different raw-score distributions, and one
 cutoff flags thirty moments in the first and none in the second.
 
 Reported set is `min(maxMoments, ceil(reportFraction * scoredPlyCount))`,
-defaulting to `min(8, ceil(0.15 n))`. `report.allScored` carries the full
-ranking; `report.moments` is the top slice.
+defaulting to `min(5, ceil(0.15 n))` — five is what a player can actually work
+through after a game. `report.allScored` carries the full ranking;
+`report.moments` is the top slice.
 
 ## Time correlation
 

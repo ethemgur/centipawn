@@ -14,6 +14,7 @@ import '../services/move_evaluator.dart';
 import '../services/database_service.dart';
 import '../services/opening_service.dart';
 import '../services/auth_service.dart';
+import '../services/critical_moments/critical_moments.dart';
 
 // ---------------------------------------------------------------------------
 // Auth state (streams the current Firebase user so widgets can react)
@@ -943,4 +944,123 @@ class CustomShapesNotifier extends Notifier<Map<String, List<Shape>>> {
 final customShapesProvider =
     NotifierProvider<CustomShapesNotifier, Map<String, List<Shape>>>(
   CustomShapesNotifier.new,
+);
+
+// ---------------------------------------------------------------------------
+// Critical moments — see docs/critical-moments.md
+// ---------------------------------------------------------------------------
+
+/// State of a critical-moment run.
+///
+/// [unavailableReason] is set instead of [report] when the analysis cannot run
+/// at all — on web there is no Stockfish, and the cloud endpoint exposes
+/// neither MultiPV nor per-depth best moves, so there is nothing to fall back
+/// to. Surfacing it is better than an empty list that looks like "no moments".
+class CriticalMomentsState {
+  final bool isRunning;
+  final int completed;
+  final int total;
+
+  /// 'shallow' | 'deep', for the progress label.
+  final String stage;
+
+  final CriticalMomentReport? report;
+  final String? unavailableReason;
+
+  /// Side the report was produced for.
+  final Side? analysedSide;
+
+  const CriticalMomentsState({
+    this.isRunning = false,
+    this.completed = 0,
+    this.total = 0,
+    this.stage = '',
+    this.report,
+    this.unavailableReason,
+    this.analysedSide,
+  });
+
+  bool get hasReport => report != null;
+
+  double get fraction => total == 0 ? 0 : completed / total;
+}
+
+class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
+  @override
+  CriticalMomentsState build() => const CriticalMomentsState();
+
+  void clear() => state = const CriticalMomentsState();
+
+  /// Which side to analyse from: whichever player the user identifies with
+  /// (`myNamesProvider`), falling back to White.
+  Side _sideForUser(GameEntry? game) {
+    final names = ref.read(myNamesProvider).map((n) => n.toLowerCase()).toList();
+    if (game == null || names.isEmpty) return Side.white;
+    if (names.contains(game.black.toLowerCase())) return Side.black;
+    return Side.white;
+  }
+
+  /// Runs Stage A+B+C over the current game's mainline.
+  Future<void> run() async {
+    final tree = ref.read(moveTreeProvider);
+    final mainline = tree.mainline;
+    if (mainline.isEmpty) return;
+
+    final engine = ref.read(engineProvider);
+    final game = ref.read(selectedGameProvider);
+    final side = _sideForUser(game);
+
+    if (!engine.isAvailable) {
+      state = CriticalMomentsState(
+        unavailableReason: 'Critical-moment analysis needs the local engine, '
+            'which the web build does not ship. Open this game in the desktop '
+            'or mobile app.',
+        analysedSide: side,
+      );
+      return;
+    }
+
+    // Live analysis and this share one engine process; leave it off for the run.
+    final wasRunning = ref.read(engineRunningProvider);
+    if (wasRunning) ref.read(engineRunningProvider.notifier).toggle();
+
+    state = CriticalMomentsState(
+      isRunning: true,
+      total: mainline.length,
+      stage: 'shallow',
+      analysedSide: side,
+    );
+
+    try {
+      final report = await CriticalMoments(engine: engine).run(
+        mainline,
+        side,
+        initialFen: tree.root.fen,
+        onProgress: (p) {
+          state = CriticalMomentsState(
+            isRunning: true,
+            completed: p.completed,
+            total: p.total,
+            stage: p.stage,
+            analysedSide: side,
+          );
+        },
+      );
+      state = CriticalMomentsState(report: report, analysedSide: side);
+    } catch (e) {
+      state = CriticalMomentsState(
+        unavailableReason: 'Critical-moment analysis failed: $e',
+        analysedSide: side,
+      );
+    } finally {
+      if (wasRunning && !ref.read(engineRunningProvider)) {
+        ref.read(engineRunningProvider.notifier).toggle();
+      }
+    }
+  }
+}
+
+final criticalMomentsProvider =
+    NotifierProvider<CriticalMomentsNotifier, CriticalMomentsState>(
+  CriticalMomentsNotifier.new,
 );

@@ -350,7 +350,8 @@ void main() {
           ply(ply: i * 2, fenBefore: middlegameFen, deep: sr(gap: 50 + i)),
       ];
       final report = const CriticalMomentScorer().score(plies, Side.white);
-      expect(report.moments.length, 8);
+      // 15% of 100 plies is 15, capped at the reported five.
+      expect(report.moments.length, 5);
       expect(report.allScored.length, 100);
     });
 

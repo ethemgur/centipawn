@@ -43,10 +43,15 @@ gameListProvider ──(user taps a game)──► selectedGameProvider
                                               │
                                               ▼
                                         reviewProvider ──► writes evals onto MoveNodes,
-                                                           persists tree + accuracies
+                                              │            persists tree + accuracies
+                                              ▼
+                                     criticalMomentsProvider ──► ranked decision points
+                                       (native only: needs runSearch)
 ```
 
-Supporting state: `engineRunningProvider` (live analysis on/off, default **true**),
+Supporting state: `engineRunningProvider` (live analysis on/off, default **true**;
+the critical-moment pass toggles it off for its duration, since it and live
+analysis share one engine process),
 `boardFlippedProvider`, `boardEditModeProvider`, `drawColorProvider`,
 `showThreatArrowProvider`, `customShapesProvider`, `reviewDepthProvider`,
 `myNamesProvider`, `authStateProvider`.
@@ -118,7 +123,9 @@ Wraps the `stockfish` pub package.
   critical-moment detection. Bounded depth, MultiPV, and a `bestByDepth` map of the
   best move at each completed iteration (`upperbound`/`lowerbound` lines skipped:
   they are unresolved and would read as the engine changing its mind). Calls are
-  serialised through a queue, since one process answers one search at a time.
+  serialised through a queue, since one process answers one search at a time, and
+  bounded by a 90 s timeout that returns whatever depth was reached — a wedged
+  search would otherwise stall an entire game sweep with no symptom.
   Returns a `SearchResult`; see [critical-moments.md](critical-moments.md).
 
 Note `analyzePosition` sets `MultiPV 1` even though init sets 3; the multi-line

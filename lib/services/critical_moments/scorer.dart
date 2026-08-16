@@ -18,6 +18,9 @@ class ScoringConfig {
   final DampConfig damps;
 
   /// Fraction of scored plies reported, capped at [maxMoments].
+  ///
+  /// The cap is the headline number: a report of five moments is something a
+  /// player can actually work through after a game.
   final double reportFraction;
   final int maxMoments;
 
@@ -33,7 +36,7 @@ class ScoringConfig {
     this.divergencePlies = kDivergencePlies,
     this.damps = DampConfig.all,
     this.reportFraction = 0.15,
-    this.maxMoments = 8,
+    this.maxMoments = 5,
     this.endgameRunPercentile = 75.0,
   });
 
