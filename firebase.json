@@ -1,0 +1,36 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "centipawnapp",
+          "appId": "1:730468512729:android:0f74af9f32fe9e7e3b9fc8",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "centipawnapp",
+          "configurations": {
+            "android": "1:730468512729:android:0f74af9f32fe9e7e3b9fc8",
+            "web": "1:730468512729:web:51a10436823525933b9fc8"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "public": "build/web",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

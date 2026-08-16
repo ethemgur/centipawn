@@ -1,0 +1,68 @@
+{
+  "project_info": {
+    "project_number": "730468512729",
+    "project_id": "centipawnapp",
+    "storage_bucket": "centipawnapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:730468512729:android:0f74af9f32fe9e7e3b9fc8",
+        "android_client_info": {
+          "package_name": "com.centipawn.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "730468512729-c8487f1tv569bnrffeila1jrtj6h467s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQhmzYi4aL8QCBArb_r9XYhAm9EqC7nFQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "730468512729-c8487f1tv569bnrffeila1jrtj6h467s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:730468512729:android:d3ce5ae503b4f9743b9fc8",
+        "android_client_info": {
+          "package_name": "com.example.centipawn"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "730468512729-c8487f1tv569bnrffeila1jrtj6h467s.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDQhmzYi4aL8QCBArb_r9XYhAm9EqC7nFQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "730468512729-c8487f1tv569bnrffeila1jrtj6h467s.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
