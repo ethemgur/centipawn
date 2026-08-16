@@ -18,8 +18,14 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# Claude Code local settings (machine-specific, not for sharing)
-.claude/
+# Claude Code — share the project config, ignore machine-specific state.
+# `.claude/*` (not `.claude/`) so the negations below can re-include entries;
+# git will not descend into a directory that is itself excluded.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/commands/
+.claude/settings.local.json
 
 # Firebase CLI local cache
 .firebase/

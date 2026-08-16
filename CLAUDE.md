@@ -1,80 +1,209 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Project
 
-Centipawn is a Flutter chess study/analysis app. It loads PGN games, plays them out on an interactive board, runs Stockfish for live position evaluation, and provides a "game review" feature that classifies every mainline move (blunder/mistake/inaccuracy/etc.). State is managed with Riverpod; games and their analysis are persisted in a local SQLite database via `sqflite`.
+Centipawn is a Flutter chess study/analysis app. It imports PGN games, plays them
+out on an interactive board, evaluates positions (Lichess cloud eval first, local
+Stockfish as fallback), and runs a "game review" that classifies every mainline
+move and computes per-side accuracy. State is Riverpod; games and their move trees
+are persisted in a local SQLite database via `sqflite`.
 
-Dart SDK: `^3.10.1`. Flutter project targets Android, iOS, web, Windows, macOS, Linux.
+Dart SDK `^3.10.1`. Targets Android, iOS, web, Windows, macOS, Linux. The web build
+is deployed to Firebase Hosting on every push to `main`
+(`.github/workflows/firebase-hosting-merge.yml`, Flutter 3.38.3, `--wasm`).
 
 ## Common commands
 
 ```
 flutter pub get                       # install deps
-flutter run                           # run on the default device
-flutter run -d chrome                 # run on web (uses engine_service_web.dart)
-flutter run -d windows                # run native desktop (uses engine_service_native.dart)
+flutter run                           # default device
+flutter run -d chrome                 # web (engine_service_web.dart, sqlite3-wasm)
+flutter run -d windows                # native desktop (engine_service_native.dart)
 flutter analyze                       # lint / static analysis (flutter_lints)
-flutter test                          # run all tests (test/ dir is currently empty)
-flutter test test/path/to/foo_test.dart -n "name"   # run a single test by name
+dart format lib                       # formatting; there is no separate format step
+flutter test                          # no tests exist yet — there is no test/ dir
 flutter build apk|ios|web|windows     # production builds
+flutter build web --wasm --release    # what CI builds
 ```
 
-There is no separate formatter step beyond `dart format`.
+## Repository map
 
-## Architecture
+```
+lib/
+  main.dart                  Firebase init → anonymous sign-in → GameListScreen
+  theme.dart                 AppColors + buildAppTheme() (light-only Lichess-ish palette)
+  firebase_options.dart      generated
+  models/
+    game_entry.dart          GameEntry — per-game metadata row
+    move_node.dart           MoveNode / MoveTree — the game as a tree
+  providers/
+    study_provider.dart      ALL app state (~970 lines, single source of truth)
+  services/
+    engine_service.dart      conditional re-export: native | web
+    engine_service_native.dart / _web.dart / engine_types.dart
+    cloud_eval_service.dart  Lichess /api/cloud-eval client
+    move_evaluator.dart      win-probability math + move classification
+    best_line_annotator.dart attaches engine PV as a variation
+    opening_service.dart     ECO detection by longest SAN prefix
+    pgn_parser.dart          PGN parse + export (movetext, mainline, full PGN)
+    database_service.dart    sqflite schema v5 + CRUD + tree load/save
+    database_factory_setup*.dart  web needs an sqlite3-wasm factory; native no-op
+    auth_service.dart        FirebaseAuth wrapper (anon / email / Google)
+  screens/                   game_list, game, settings, login
+  widgets/                   chess_board, study_notation, eval_bar, eval_chart,
+                             responsive_layout, edit_game_metadata_dialog
+packages/dartchess/          vendored dartchess 0.12.3 (dependency_overrides)
+docs/                        deep-dive docs — see below
+```
+
+## Deep-dive docs
+
+Read the relevant one before changing that area; keep them current (see
+"Documentation upkeep").
+
+| Doc | Covers |
+| --- | --- |
+| [docs/architecture.md](docs/architecture.md) | Provider graph, load/save lifecycle, engine + cloud eval layer |
+| [docs/evaluation.md](docs/evaluation.md) | Eval sign conventions, review pipeline, classification, accuracy |
+| [docs/data-model.md](docs/data-model.md) | `MoveNode`/`MoveTree`, `GameEntry`, SQLite schema, PGN I/O |
+| [docs/ui-map.md](docs/ui-map.md) | Screens, widgets, responsive layout, theming |
+| [docs/documentation-maintenance.md](docs/documentation-maintenance.md) | What to update when, and how the doc hooks work |
+
+## Architecture essentials
 
 ### Engine abstraction (conditional import)
 
-`lib/services/engine_service.dart` is a thin re-export that selects the platform implementation at compile time:
+`lib/services/engine_service.dart` picks the platform implementation at compile
+time:
 
 ```dart
+export 'engine_types.dart';
 export 'engine_service_native.dart' if (dart.library.js_interop) 'engine_service_web.dart';
 ```
 
-Both implementations expose the same `EngineService` API (declared via `engine_types.dart`): `evaluationStream`, `analyzePosition(fen)`, `evaluatePosition(fen, depth:)`, `isAvailable`, `stop()`, `dispose()`. When adding or changing engine behavior, update **both** `_native` and `_web` files and keep types defined in `engine_types.dart`. Stockfish is provided by the `stockfish` pub package on native; the **web implementation is a no-op stub** — `isAvailable` is `false` there and `evaluatePosition` returns a placeholder 0.00, so on web the only real evaluation source is `CloudEvalService` (Lichess cloud eval). Never treat a score from an engine with `isAvailable == false` as analysis.
+Both expose the same API: `evaluationStream`, `analyzePosition(fen)`,
+`evaluatePosition(fen, depth:)`, `isReady`, `isAvailable`, `stop()`, `dispose()`.
+Shared types live in `engine_types.dart`. Change **both** implementations together.
+
+The **web implementation is a no-op stub**: `isAvailable == false` and
+`evaluatePosition` returns a placeholder 0.00. On web the only real evaluation
+source is `CloudEvalService`. Never treat a score from an engine with
+`isAvailable == false` as analysis.
 
 ### Move tree, not a move list
 
-A game is a `MoveTree` of `MoveNode`s (`lib/models/move_node.dart`), not a flat list. Each node stores its own FEN, SAN, optional engine `evaluation`/`mate`/`quality`, comments, NAGs, and children. The first child of a node is the mainline; subsequent children are variations. Helpful invariants:
+A game is a `MoveTree` of `MoveNode`s. Each node stores its own FEN, SAN, UCI,
+`evaluation`/`mate`/`quality`, the parent position's `bestMoveUci`/`bestMoveEval`/
+`bestMoveMate`, comments, NAGs, and children. First child = mainline, the rest are
+variations.
 
 - `MoveTree.mainline` walks `children.first` from root, **excluding the root**.
-- `MoveNode.isBlackMove` and `moveNumber` are derived by walking up to root — depth from root determines colour (depth 1 = White's first move).
-- New user moves go through `ActiveNodeNotifier.makeMove`, which promotes an existing child if the SAN matches, or appends a new mainline child and rewrites the game's PGN via `PgnParser.exportMainline`.
+- `MoveNode.isBlackMove` and `moveNumber` are derived by walking up to the root —
+  depth 1 = White's first move.
+- New user moves go through `ActiveNodeNotifier.makeMove`, which navigates to an
+  existing child when the SAN matches, otherwise appends a child and calls
+  `MoveTreeNotifier.persist()` + `refresh()`.
 
-### State (Riverpod) — single source of truth in `lib/providers/study_provider.dart`
+### State: `lib/providers/study_provider.dart`
 
-All app state flows through this file. Key providers and how they interact:
+Everything lives here. The providers that matter most:
 
-- `gameListProvider` (AsyncNotifier) — list of `GameEntry` rows from SQLite. Seeds 5 famous games on first launch if DB is empty.
-- `selectedGameProvider` — the currently open `GameEntry`.
-- `moveTreeProvider` — `MoveTree` built by `PgnParser.parsePgn` when a game is loaded.
-- `activeNodeProvider` — current position in the tree; navigation methods (`goForward`, `goBack`, `goFirst`, `goLast`, `setNode`, `makeMove`) live here. Setting the node triggers `engineProvider.analyzePosition(fen)` if the engine is running.
-- `engineRunningProvider` — on/off toggle for live analysis.
-- `engineEvaluationProvider` — `StreamProvider` wrapping `engine.evaluationStream`.
-- `reviewProvider` — runs game review: serializes per-mainline-node `{evaluation, mate, quality}` to JSON and persists to the `analysisJson` column via `DatabaseService.saveAnalysis`. Saved analysis is reapplied on load via `MoveTreeNotifier.applyAnalysis`.
+- `gameListProvider` (AsyncNotifier) — `GameEntry` rows; seeds 5 famous games when
+  the DB is empty. Add/import/update/delete go through it.
+- `selectedGameProvider` — the open `GameEntry`.
+- `moveTreeProvider` — the tree; `loadFromDb`, `setTree`, `loadPgn`, `refresh`,
+  `persist`.
+- `activeNodeProvider` — current position; `goForward/goBack/goFirst/goLast/setNode/
+  makeMove`. `setNode` kicks off `engine.analyzePosition(fen)` when the engine is on.
+- `engineRunningProvider` — live-analysis toggle (defaults **true**).
+- `engineEvaluationProvider` (stream, local) + `cloudEvalProvider` (one-shot,
+  Lichess) → merged by `combinedEvalProvider` (higher depth wins).
+- `evalAreFreshProvider` — false the instant the position changes, true again once
+  the engine emits for the new FEN. Guards against rendering a stale eval.
+- `reviewProvider` — the game review; see `docs/evaluation.md`.
+- `reviewDepthProvider`, `myNamesProvider` — persisted in `SharedPreferences`.
+- `customShapesProvider` — user circles/arrows keyed by `g<gameId>::<fen>`.
+- `boardFlippedProvider`, `boardEditModeProvider`, `drawColorProvider`,
+  `showThreatArrowProvider`, `authStateProvider`.
 
 ### Engine eval convention
 
-Stockfish reports score from the side-to-move's POV. `ReviewNotifier._toCpWhitePerspective` normalizes everything to **centipawns from White's perspective**, including mate scores (`±10000`). Stored `MoveNode.evaluation` is in **pawns** (cp/100), and `mate` is signed from White's perspective. Preserve this convention — the eval chart and bar depend on it. `mate == 0` means "the side to move has just been mated" and pairs with an `evaluation` of `±100.0`.
+Stockfish and `CloudEvalService` both hand back scores from the **side-to-move's**
+POV (`CloudEvalService` converts Lichess's White-POV numbers before returning).
+`ReviewNotifier._toCpWhitePerspective` normalizes to **centipawns from White's
+perspective**, mate included (`±10000`).
 
-Game-over positions never reach the engine or the cloud: `ReviewNotifier._terminalEval` answers them from dartchess (checkmate → `mate: 0`, stalemate/dead draw → 0.00). Positions nothing can evaluate yield a `null` eval, which leaves `MoveNode.evaluation`/`quality` null and breaks the drop chain — never substitute 0.00, which reads as a dead-equal position and fabricates huge swings on the surrounding moves.
+Stored on `MoveNode`: `evaluation` is in **pawns** (cp/100), `mate` is signed from
+White's POV. `mate == 0` means "the side to move has just been mated". Preserve
+this — the eval bar and eval chart depend on it.
+
+Game-over positions never reach the engine or the cloud: `ReviewNotifier._terminalEval`
+answers them from dartchess (checkmate → `mate: 0`, stalemate/insufficient material
+→ 0.00). A position nothing can evaluate yields a **null** eval, which leaves
+`evaluation`/`quality` null and breaks the drop chain. Never substitute 0.00 — it
+reads as dead-equal and fabricates huge swings on the surrounding moves.
 
 ### Move classification
 
-`MoveEvaluator.classifyMove(prevEvalWhitePOV, curEvalWhitePOV, isWhiteMove)` in `lib/services/move_evaluator.dart` produces a `MoveQuality`. Both inputs must already be in White's POV centipawns.
+`MoveEvaluator.classifyMove(ChessEvaluation best, ChessEvaluation actual, bool isWhiteTurn)`
+converts both to win probability (Lichess logistic curve, `cpToWinProb`) and
+classifies the drop via `classifyByWpDrop`: ≥20 pp blunder, ≥10 mistake, ≥5
+inaccuracy, otherwise **null** (no label). `MoveQuality` also has `best`/`excellent`/
+`good` values, used for NAG export but not produced by the review.
+
+The review calls `classifyByWpDrop` directly so it can redistribute horizon-shift
+drops backward onto the move that actually deviated — see `docs/evaluation.md`.
 
 ### Persistence
 
-`DatabaseService` (sqflite) opens `centipawn.db` with schema version 3. Schema columns include PGN metadata (event/site/round/elos/timeControl/date), `tags`, `isReviewed`, and `analysisJson`. Bump `version` and add a migration in `onUpgrade` if you change the schema.
+`DatabaseService` opens `centipawn.db` at **schema version 5**, two tables:
+`games` (metadata, incl. `whiteAccuracy`/`blackAccuracy`/`openingCode`/`lastFen`)
+and `move_nodes` (one row per node, `parentId` + `orderIndex`, index 0 = mainline).
+There is no PGN column and no `analysisJson` column — analysis lives on the node rows.
+
+`onUpgrade` is **reseed-only**: it drops both tables and recreates the schema, and
+the game list re-seeds on next launch. If you change the schema, bump `version` and
+keep (or deliberately replace) that strategy.
 
 ### UI layout
 
-`main.dart` → `GameListScreen` → `GameScreen`. `widgets/responsive_layout.dart` switches between phone/tablet/desktop arrangements of the board, eval bar, eval chart, and notation pane.
+`main.dart` → `GameListScreen` → `GameScreen`. `widgets/responsive_layout.dart`
+picks a layout from `MediaQuery.displayFeatures` (Z Fold hinge → book/flex postures)
+falling back to width: >600 px = 60/40 board/notation row, otherwise a vertical stack.
 
 ## Conventions worth knowing
 
-- `MoveNode` is marked `// ignore: must_be_immutable` because Equatable is used despite mutable fields (`evaluation`, `mate`, `quality`, `children`). Don't "fix" this without restructuring how analysis is written back to the tree.
-- When a move is added or the tree changes shape, call `ref.invalidate(moveTreeProvider)` so dependent widgets (notably the notation widget) rebuild — see `ActiveNodeNotifier.makeMove`.
-- Piece SVGs are in `assets/` (`wK.svg`, `bN.svg`, …) and registered under `flutter.assets: - assets/` in `pubspec.yaml`.
+- `MoveNode` is `// ignore: must_be_immutable` because it uses Equatable despite
+  mutable fields (`evaluation`, `mate`, `quality`, `bestMove*`, `children`). Don't
+  "fix" this without restructuring how analysis is written back into the tree.
+- After changing the tree's shape, call `MoveTreeNotifier.refresh()` (it rebuilds
+  `MoveTree.withRoot(state.root)`) so notation/chart widgets rebuild — a mutation
+  in place is invisible to Riverpod otherwise.
+- `avoid_print: true` is enforced; use `debugPrint`.
+- Piece SVGs live in `assets/` and are registered wholesale under
+  `flutter.assets: - assets/` in `pubspec.yaml`.
+- `packages/dartchess` is a vendored copy of dartchess 0.12.3 patched so
+  `_popcnt64()` avoids 64-bit literals dart2js/dart2wasm can't represent. Don't
+  drop the `dependency_overrides` entry without re-testing `flutter build web`.
+- `BestLineAnnotator` marks its generated variation with the `[eng]` comment so
+  re-reviews can replace it; `PgnParser` filters `[eng]` out of exports.
+
+## Documentation upkeep
+
+**When you change code under `lib/` (or `pubspec.yaml`), update the docs in the
+same turn.** Concretely: re-read the section of `CLAUDE.md` and the `docs/` page
+that covers the area you touched, and fix anything your change made untrue —
+provider names, method signatures, schema version, eval conventions, file layout.
+
+This is enforced by hooks in `.claude/settings.json`:
+
+- a `PostToolUse` hook records every `lib/**.dart` / `pubspec.yaml` file you edit;
+- a `Stop` hook blocks the end of the turn once with the list of those files and a
+  reminder to reconcile the docs.
+
+`/update-docs` runs a full audit of `CLAUDE.md` + `docs/` against the current code.
+`scripts/check-docs-freshness.sh` reports the same drift for staged git changes and
+can be installed as a pre-commit hook via `scripts/install-git-hooks.sh`. Details in
+[docs/documentation-maintenance.md](docs/documentation-maintenance.md).
