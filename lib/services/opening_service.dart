@@ -34,6 +34,28 @@ class OpeningService {
     return bestLength > 0 ? '$bestEco: $bestName' : null;
   }
 
+  /// Length of the longest known opening line that [sans] starts with.
+  ///
+  /// Used as the book fallback by `RepertoireMatcher` when the user has not
+  /// loaded a repertoire. Much coarser than a real repertoire — this table only
+  /// goes a few moves deep — so callers should say when they are relying on it.
+  static int longestBookPrefix(List<String> sans) {
+    int best = 0;
+    for (final o in _openings) {
+      final len = o.moves.length;
+      if (len > sans.length || len <= best) continue;
+      bool ok = true;
+      for (int i = 0; i < len; i++) {
+        if (sans[i] != o.moves[i]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) best = len;
+    }
+    return best;
+  }
+
   static const _openings = <_Opening>[
     // A — Flank openings
     _Opening('A00', "King's Fianchetto", ['g3']),

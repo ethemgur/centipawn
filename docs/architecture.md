@@ -114,6 +114,12 @@ Wraps the `stockfish` pub package.
 - Parsed `info` lines become `EngineEvaluation(scoreCp /* pawns */, mate, pv, depth)`
   keyed by `multipv` index and pushed to `evaluationStream` sorted by index, wrapped
   in a `PositionEvals(fen, evals)`.
+- `runSearch(fen, depth:, multiPv:)` — the analysis-grade search used by
+  critical-moment detection. Bounded depth, MultiPV, and a `bestByDepth` map of the
+  best move at each completed iteration (`upperbound`/`lowerbound` lines skipped:
+  they are unresolved and would read as the engine changing its mind). Calls are
+  serialised through a queue, since one process answers one search at a time.
+  Returns a `SearchResult`; see [critical-moments.md](critical-moments.md).
 
 Note `analyzePosition` sets `MultiPV 1` even though init sets 3; the multi-line
 arrows on the board come from whatever the current setting yields plus the cloud
@@ -122,8 +128,8 @@ provider's `multiPv: 3`.
 ### Web (`engine_service_web.dart`)
 
 A stub. No Stockfish ships with the web build: `isAvailable`/`isReady` are `false`,
-`analyzePosition` and `stop` do nothing, `evaluatePosition` returns `scoreCp: 0`, and
-`evaluationStream` **never emits**. Callers **must** check `isAvailable` before
+`analyzePosition` and `stop` do nothing, `evaluatePosition` returns `scoreCp: 0`,
+`runSearch` throws `StateError`, and `evaluationStream` **never emits**. Callers **must** check `isAvailable` before
 trusting a score — `ReviewNotifier._fetchEval` does exactly that and returns `null`
 instead — and must never gate the display of an eval on the local stream having
 produced something, or the whole feature silently disappears on web. (That was a

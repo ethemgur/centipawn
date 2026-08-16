@@ -14,7 +14,14 @@ class PgnParser {
     final tree = MoveTree(initialFen: initialFen);
 
     // Strip PGN header tags (e.g. [White "Kasparov"]) then tokenise.
-    final String movetext = pgn.replaceAll(RegExp(r'\[.*?\]'), '').trim();
+    //
+    // Anchored to whole lines on purpose: a blanket `\[.*?\]` also eats the
+    // bracketed annotations that live *inside* comments — `[%clk 0:03:00]`,
+    // `[%eval ...]`, `[%cal ...]` — which are the only record of how long a
+    // move took.
+    final String movetext = pgn
+        .replaceAll(RegExp(r'^\s*\[\s*\w+\s+"[^"]*"\s*\]\s*$', multiLine: true), '')
+        .trim();
     final tokens = _tokenize(movetext);
 
     MoveNode currentNode = tree.root;

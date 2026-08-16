@@ -30,7 +30,7 @@ flutter run -d chrome                 # web (engine_service_web.dart, sqlite3-wa
 flutter run -d windows                # native desktop (engine_service_native.dart)
 flutter analyze                       # lint / static analysis (flutter_lints)
 dart format lib                       # formatting; there is no separate format step
-flutter test                          # no tests exist yet — there is no test/ dir
+flutter test                          # unit tests (Stage C of critical moments, PGN parsing)
 flutter build apk|ios|web|windows     # production builds
 flutter build web --wasm --release    # what CI builds
 ```
@@ -62,6 +62,8 @@ lib/
   widgets/                   chess_board, study_notation, eval_bar, eval_chart,
                              responsive_layout, edit_game_metadata_dialog
 packages/dartchess/          vendored dartchess 0.12.3 (dependency_overrides)
+test/                        unit tests; critical_moments/data holds JSON fixtures
+tool/                        validate_critical_moments.dart, capture_critical_fixture.dart
 docs/                        deep-dive docs — see below
 ```
 
@@ -76,6 +78,7 @@ Read the relevant one before changing that area; keep them current (see
 | [docs/evaluation.md](docs/evaluation.md) | Eval sign conventions, review pipeline, classification, accuracy |
 | [docs/data-model.md](docs/data-model.md) | `MoveNode`/`MoveTree`, `GameEntry`, SQLite schema, PGN I/O |
 | [docs/ui-map.md](docs/ui-map.md) | Screens, widgets, responsive layout, theming |
+| [docs/critical-moments.md](docs/critical-moments.md) | Critical-moment detection: stages, components, gates, time regression |
 | [docs/documentation-maintenance.md](docs/documentation-maintenance.md) | What to update when, and how the doc hooks work |
 
 ## Architecture essentials
@@ -91,9 +94,15 @@ export 'engine_service_native.dart' if (dart.library.js_interop) 'engine_service
 ```
 
 Both expose the same API: `evaluationStream` (of `PositionEvals`),
-`analyzePosition(fen)`, `evaluatePosition(fen, depth:)`, `isReady`, `isAvailable`,
-`stop()`, `dispose()`. Shared types live in `engine_types.dart`. Change **both**
-implementations together.
+`analyzePosition(fen)`, `evaluatePosition(fen, depth:)`, `runSearch(fen, depth:,
+multiPv:)`, `isReady`, `isAvailable`, `stop()`, `dispose()`. Shared types live in
+`engine_types.dart`. Change **both** implementations together.
+
+`runSearch` is the analysis-grade search: bounded depth, MultiPV, and a
+`bestByDepth` map of the best move at every completed iteration. Calls are
+serialised — one process answers one search at a time. The web stub throws
+`StateError`, because the cloud endpoint exposes neither MultiPV nor per-depth
+best moves and there is nothing honest to fall back to.
 
 The **web implementation is a no-op stub**: `isAvailable == false`,
 `evaluatePosition` returns a placeholder 0.00, and `evaluationStream` never emits.

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:dartchess/dartchess.dart';
 import 'package:flutter/foundation.dart';
 import 'package:stockfish/stockfish.dart';
 import 'engine_types.dart';
@@ -69,11 +70,26 @@ class EngineService {
   // with every batch so consumers can tell which position an eval describes.
   String _analyzingFen = '';
 
+  // ── MultiPV analysis search (runSearch) ───────────────────────────────────
+  // Kept separate from the streaming/depth paths above: this one accumulates
+  // every multipv line *and* the per-depth best move, and completes on bestmove.
+  Completer<SearchResult>? _multiPvCompleter;
+  final Map<int, PvLine> _multiPvLines = {};
+  final Map<int, String> _multiPvBestByDepth = {};
+  int _multiPvMaxDepth = 0;
+  /// Serialises runSearch calls — a game sweep issues hundreds back to back and
+  /// a single Stockfish process can only answer one at a time.
+  Future<void> _searchQueue = Future<void>.value();
+
   void _handleEngineOutput(String line) {
     final trimmed = line.trim();
     if (trimmed == 'readyok') {
       _readyCompleter?.complete();
       _readyCompleter = null;
+      return;
+    }
+    if (_multiPvCompleter != null) {
+      _handleMultiPvOutput(line);
       return;
     }
     // When a depth-limited search finishes, Stockfish outputs "bestmove ..."
@@ -139,6 +155,138 @@ class EngineService {
       final evals = sortedKeys.map((k) => _currentEvals[k]!).toList();
       _evaluationController.add(PositionEvals(_analyzingFen, evals));
     }
+  }
+
+  /// Accumulates one search's `info` lines into [_multiPvLines] and
+  /// [_multiPvBestByDepth], completing the pending future on `bestmove`.
+  void _handleMultiPvOutput(String line) {
+    if (line.startsWith('bestmove')) {
+      final completer = _multiPvCompleter;
+      _multiPvCompleter = null;
+      if (completer != null && !completer.isCompleted) {
+        final indices = _multiPvLines.keys.toList()..sort();
+        completer.complete(SearchResult(
+          fen: _analyzingFen,
+          depth: _multiPvMaxDepth,
+          pvs: [for (final i in indices) _multiPvLines[i]!],
+          // Filled in by runSearch, which has the position parsed.
+          legalMoveCount: 0,
+          inCheck: false,
+          bestByDepth: Map<int, String>.from(_multiPvBestByDepth),
+        ));
+      }
+      return;
+    }
+
+    if (!line.startsWith('info') || !line.contains(' score ')) return;
+    // Fail-soft/fail-high lines carry a bound, not a resolved score. Letting
+    // them into bestByDepth makes the engine look like it changed its mind
+    // mid-iteration and inflates depth-to-settle.
+    if (line.contains('upperbound') || line.contains('lowerbound')) return;
+
+    final parts = line.split(' ');
+    int depth = 0;
+    int pvIndex = 1;
+    int scoreCp = 0;
+    int? mateIn;
+    List<String> pv = const [];
+
+    for (int i = 0; i < parts.length - 1; i++) {
+      switch (parts[i]) {
+        case 'depth':
+          depth = int.tryParse(parts[i + 1]) ?? 0;
+        case 'multipv':
+          pvIndex = int.tryParse(parts[i + 1]) ?? 1;
+        case 'score':
+          if (parts[i + 1] == 'cp' && i + 2 < parts.length) {
+            scoreCp = int.tryParse(parts[i + 2]) ?? 0;
+          } else if (parts[i + 1] == 'mate' && i + 2 < parts.length) {
+            mateIn = int.tryParse(parts[i + 2]);
+          }
+        case 'pv':
+          pv = parts.sublist(i + 1);
+      }
+      if (parts[i] == 'pv') break;
+    }
+
+    if (pv.isEmpty) return;
+    if (depth > _multiPvMaxDepth) _multiPvMaxDepth = depth;
+
+    _multiPvLines[pvIndex] =
+        PvLine(movesUci: pv, scoreCp: scoreCp, mateIn: mateIn);
+
+    // Only the top line defines "what the engine currently thinks is best".
+    if (pvIndex == 1 && depth > 0) _multiPvBestByDepth[depth] = pv.first;
+  }
+
+  /// Runs one bounded MultiPV search and returns everything it produced,
+  /// including the best move at every completed depth.
+  ///
+  /// Calls are serialised: the underlying process handles one search at a time,
+  /// so a caller sweeping a whole game can simply await these in a loop.
+  /// Throws [StateError] when no engine is available — check [isAvailable]
+  /// first rather than treating a returned score as analysis.
+  Future<SearchResult> runSearch(
+    String fen, {
+    int depth = 15,
+    int multiPv = 3,
+  }) {
+    final result = _searchQueue.then((_) => _runSearchLocked(
+          fen,
+          depth: depth,
+          multiPv: multiPv,
+        ));
+    // Keep the chain alive even if one search fails, or every later search in
+    // the sweep inherits the error.
+    _searchQueue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<SearchResult> _runSearchLocked(
+    String fen, {
+    required int depth,
+    required int multiPv,
+  }) async {
+    if (_stockfish == null) {
+      throw StateError('No Stockfish engine available on this platform');
+    }
+    while (_stockfish!.state.value != StockfishState.ready) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    // dartchess answers these far more cheaply than the engine can.
+    final position = Chess.fromSetup(Setup.parseFen(fen));
+    final legalMoveCount = position.legalMoves.values
+        .fold<int>(0, (sum, set) => sum + set.size);
+
+    _sendCommand('stop');
+    _readyCompleter = Completer<void>();
+    _sendCommand('isready');
+    await _readyCompleter!.future.timeout(
+      const Duration(seconds: 2),
+      onTimeout: () => _readyCompleter = null,
+    );
+
+    _multiPvLines.clear();
+    _multiPvBestByDepth.clear();
+    _multiPvMaxDepth = 0;
+    _analyzingFen = fen;
+    final completer = Completer<SearchResult>();
+    _multiPvCompleter = completer;
+
+    _sendCommand('setoption name MultiPV value $multiPv');
+    _sendCommand('position fen $fen');
+    _sendCommand('go depth $depth');
+
+    final raw = await completer.future;
+    return SearchResult(
+      fen: fen,
+      depth: raw.depth,
+      pvs: raw.pvs,
+      legalMoveCount: legalMoveCount,
+      inCheck: position.isCheck,
+      bestByDepth: raw.bestByDepth,
+    );
   }
 
   void _sendCommand(String command) {
