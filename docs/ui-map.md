@@ -31,7 +31,7 @@ Structure:
   `_buildBoardToolbar`.
 - `_BoardWithEval` — `EvalBar` + `ChessBoard` + `_PlayerBar`s.
 - `_EngineAnalysisBox` — `ConsumerStatefulWidget` rendering `combinedEvalProvider`
-  lines (gated on `evalAreFreshProvider`).
+  lines (always for the current position — the provider FEN-matches for you).
 - `_NotationPanel` — wraps `StudyNotation` and `EvalChart`.
 - `_GameBottomBar`, `_RepeatNavButton` (press-and-hold repeat for move stepping),
   `_ReviewProgressToast`, `_PlayerBar`, `_AccuracyBadge`, `_BoardEditToolbar`,
@@ -58,7 +58,7 @@ Google sign-in, all via `AuthService`.
 | --- | --- |
 | `ChessBoard` | Wraps chessground. Handles promotion via chessground's selector (`_pendingPromotion`), engine-suggestion arrows, and a drawing overlay when `boardEditModeProvider` is on (tap = circle, drag = arrow, written to `customShapesProvider`). Alternatives are filtered to within 10 pp win probability of the best line and faded/thinned by drop and rank. |
 | `StudyNotation` | Move-pair rows, variation blocks, sub-variations, comments and NAG glyphs; auto-scrolls the active node into view. Tapping a move calls `activeNodeProvider.setNode`. |
-| `EvalBar` | 24 px vertical bar. `evaluation` in pawns (White +), `mate`, `isFlipped`. Ratio is `0.5 + (eval/3)*0.45` clamped to 0.05–0.95; mate pins to an end. Shows `M<n>` for mates. |
+| `EvalBar` | 24 px vertical bar. `evaluation` in pawns (White +), `mate`, `isFlipped`. Ratio is `0.5 + (eval/3)*0.45` clamped to 0.05–0.95; mate pins to an end. The score is printed on the leading side's section whenever it is non-zero once rounded to one decimal (so `0.1` shows; a level `0.0` and the pre-analysis default stay blank); mates show `M<n>`. |
 | `EvalChart` | Custom-painted line chart over the mainline, zero-line in the middle, quality markers. Renders **only after a completed review** (`reviewProvider.isCompleted`). Mates plot as ±10.0; a null eval repeats the previous point. |
 | `ResponsiveLayout` | Layout switch — see below. |
 | `edit_game_metadata_dialog.dart` | `showEditGameMetadataDialog(context, ref, game)`, reachable from the game-screen title and from list tiles. |

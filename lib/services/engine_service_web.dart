@@ -2,9 +2,12 @@ import 'dart:async';
 import 'engine_types.dart';
 
 class EngineService {
-  final _evaluationController = StreamController<List<EngineEvaluation>>.broadcast();
+  final _evaluationController = StreamController<PositionEvals>.broadcast();
 
-  Stream<List<EngineEvaluation>> get evaluationStream => _evaluationController.stream;
+  /// Never emits — see [isAvailable]. On web the only real evaluation source is
+  /// `CloudEvalService`, so nothing may depend on this stream producing a value
+  /// before it treats an eval as usable.
+  Stream<PositionEvals> get evaluationStream => _evaluationController.stream;
   bool get isReady => false;
 
   /// No Stockfish build ships with the web app, so nothing here can actually

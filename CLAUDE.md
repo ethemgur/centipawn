@@ -90,14 +90,17 @@ export 'engine_types.dart';
 export 'engine_service_native.dart' if (dart.library.js_interop) 'engine_service_web.dart';
 ```
 
-Both expose the same API: `evaluationStream`, `analyzePosition(fen)`,
-`evaluatePosition(fen, depth:)`, `isReady`, `isAvailable`, `stop()`, `dispose()`.
-Shared types live in `engine_types.dart`. Change **both** implementations together.
+Both expose the same API: `evaluationStream` (of `PositionEvals`),
+`analyzePosition(fen)`, `evaluatePosition(fen, depth:)`, `isReady`, `isAvailable`,
+`stop()`, `dispose()`. Shared types live in `engine_types.dart`. Change **both**
+implementations together.
 
-The **web implementation is a no-op stub**: `isAvailable == false` and
-`evaluatePosition` returns a placeholder 0.00. On web the only real evaluation
-source is `CloudEvalService`. Never treat a score from an engine with
-`isAvailable == false` as analysis.
+The **web implementation is a no-op stub**: `isAvailable == false`,
+`evaluatePosition` returns a placeholder 0.00, and `evaluationStream` never emits.
+On web the only real evaluation source is `CloudEvalService`. Never treat a score
+from an engine with `isAvailable == false` as analysis — and never make the display
+of an eval conditional on the local stream having emitted, or the feature dies
+silently on web while working on mobile.
 
 ### Move tree, not a move list
 
@@ -126,9 +129,10 @@ Everything lives here. The providers that matter most:
   makeMove`. `setNode` kicks off `engine.analyzePosition(fen)` when the engine is on.
 - `engineRunningProvider` — live-analysis toggle (defaults **true**).
 - `engineEvaluationProvider` (stream, local) + `cloudEvalProvider` (one-shot,
-  Lichess) → merged by `combinedEvalProvider` (higher depth wins).
-- `evalAreFreshProvider` — false the instant the position changes, true again once
-  the engine emits for the new FEN. Guards against rendering a stale eval.
+  Lichess) → merged by `combinedEvalProvider`. Both sources yield a
+  `PositionEvals(fen, evals)`; the merge drops anything whose FEN isn't the active
+  node's, then picks the higher depth. Its result is therefore always for the
+  current position — widgets render it directly, with no freshness flag.
 - `reviewProvider` — the game review; see `docs/evaluation.md`.
 - `reviewDepthProvider`, `myNamesProvider` — persisted in `SharedPreferences`.
 - `customShapesProvider` — user circles/arrows keyed by `g<gameId>::<fen>`.

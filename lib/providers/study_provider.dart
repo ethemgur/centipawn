@@ -250,80 +250,59 @@ final engineProvider = Provider<EngineService>((ref) {
   return service;
 });
 
-final engineEvaluationProvider = StreamProvider<List<EngineEvaluation>>((ref) {
+final engineEvaluationProvider = StreamProvider<PositionEvals>((ref) {
   return ref.watch(engineProvider).evaluationStream;
 });
 
 /// Fires a one-shot Lichess cloud-eval request whenever the active node or
-/// engine-running state changes. Returns an empty list on cache miss or
+/// engine-running state changes. Returns [PositionEvals.none] on cache miss or
 /// network failure so callers can fall back gracefully.
 final cloudEvalProvider =
-    FutureProvider.autoDispose<List<EngineEvaluation>>((ref) async {
+    FutureProvider.autoDispose<PositionEvals>((ref) async {
   final node = ref.watch(activeNodeProvider);
   final isRunning = ref.watch(engineRunningProvider);
-  if (!isRunning || node == null) return [];
+  if (!isRunning || node == null) return PositionEvals.none;
 
   final result = await CloudEvalService.evaluate(node.fen, multiPv: 3);
-  return result ?? [];
+  return result == null ? PositionEvals.none : PositionEvals(node.fen, result);
 });
 
 /// Merges [engineEvaluationProvider] (local Stockfish, streaming) with
-/// [cloudEvalProvider] (Lichess cache, one-shot).
+/// [cloudEvalProvider] (Lichess cache, one-shot) and returns the evals for the
+/// **current** position — never a leftover from the position the user just
+/// left, so callers can render the result directly.
 ///
-/// Whichever source currently has the higher depth on its principal variation
-/// is shown. In practice: local engine provides quick early-depth updates
-/// while the cloud request is in-flight; cloud result overrides once it
-/// arrives (typically depth 30+); local engine takes over again once it
-/// surpasses the cloud depth.
+/// Both sources are matched against the active node's FEN before being
+/// considered: an in-flight `FutureProvider` keeps serving its previous value
+/// while it reloads, and the engine stream keeps its last event until the next
+/// one arrives, so without the FEN check either can hand back the previous
+/// position's numbers.
+///
+/// Of the sources that do describe the current position, whichever has the
+/// higher depth on its principal variation wins. In practice: the local engine
+/// provides quick early-depth updates while the cloud request is in flight; the
+/// cloud result overrides once it arrives (typically depth 30+); the local
+/// engine takes over again once it surpasses the cloud depth. On web there is
+/// no local engine at all, so the cloud is the only source — which is why this
+/// must not require the engine stream to have emitted.
 final combinedEvalProvider =
-    Provider.autoDispose<AsyncValue<List<EngineEvaluation>>>((ref) {
-  final localAsync = ref.watch(engineEvaluationProvider);
-  final cloudAsync = ref.watch(cloudEvalProvider);
+    Provider.autoDispose<List<EngineEvaluation>>((ref) {
+  final fen = ref.watch(activeNodeProvider)?.fen;
+  if (fen == null) return const [];
 
-  final localList = localAsync.value ?? [];
-  final cloudList = cloudAsync.value ?? [];
+  final local = ref.watch(engineEvaluationProvider).value ?? PositionEvals.none;
+  final cloud = ref.watch(cloudEvalProvider).value ?? PositionEvals.none;
 
-  if (cloudList.isNotEmpty) {
-    final cloudDepth = cloudList.first.depth;
-    final localDepth = localList.isNotEmpty ? localList.first.depth : 0;
-    if (cloudDepth > localDepth) {
-      return AsyncValue.data(cloudList);
-    }
-  }
-  // Cloud not yet available or local is deeper — use the local async value
-  // (may still be loading/empty, which the UI already handles gracefully).
-  return localAsync;
+  final localList =
+      local.matches(fen) ? local.evals : const <EngineEvaluation>[];
+  final cloudList =
+      cloud.matches(fen) ? cloud.evals : const <EngineEvaluation>[];
+
+  if (cloudList.isEmpty) return localList;
+  if (localList.isEmpty) return cloudList;
+
+  return cloudList.first.depth > localList.first.depth ? cloudList : localList;
 });
-
-/// True only when [combinedEvalProvider] contains evals that were produced
-/// for the *current* active node's FEN — i.e. they are not stale leftovers
-/// from the previous position.
-///
-/// Becomes false the instant [activeNodeProvider] changes (before the engine
-/// stream has a chance to clear), so widgets never render the old position's
-/// eval with the new position's side-to-move correction applied.
-/// Becomes true again once the engine stream emits a non-empty list (which
-/// only happens after the engine has started analysis on the new FEN).
-class _EvalFreshnessNotifier extends Notifier<bool> {
-  @override
-  bool build() {
-    // Drop stale evals as soon as the position changes.
-    ref.listen(activeNodeProvider, (prev, next) {
-      if (prev?.fen != next?.fen) state = false;
-    });
-    // Mark fresh when the engine emits results; reset when it clears.
-    ref.listen(engineEvaluationProvider, (_, next) {
-      final list = next.value;
-      if (list == null) return;
-      state = list.isNotEmpty;
-    });
-    return false;
-  }
-}
-
-final evalAreFreshProvider =
-    NotifierProvider<_EvalFreshnessNotifier, bool>(
-        _EvalFreshnessNotifier.new);
 
 class EngineRunningNotifier extends Notifier<bool> {
   @override

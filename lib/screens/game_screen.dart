@@ -552,7 +552,7 @@ class _EngineAnalysisBoxState extends ConsumerState<_EngineAnalysisBox> {
 
   @override
   Widget build(BuildContext context) {
-    final evalsAsync = ref.watch(combinedEvalProvider);
+    final liveEvals = ref.watch(combinedEvalProvider);
     final isRunning = ref.watch(engineRunningProvider);
     final activeNode = ref.watch(activeNodeProvider);
     final isExpanded = _expanded;
@@ -561,10 +561,7 @@ class _EngineAnalysisBoxState extends ConsumerState<_EngineAnalysisBox> {
       return const SizedBox();
     }
 
-    final evalsAreFresh = ref.watch(evalAreFreshProvider);
-    final evals = (evalsAreFresh && evalsAsync.hasValue && evalsAsync.value!.isNotEmpty)
-        ? _filterByWinProbGs(evalsAsync.value!)
-        : <EngineEvaluation>[];
+    final evals = _filterByWinProbGs(liveEvals);
     final fen = activeNode?.fen ?? _startFen;
     final isBlackTurn = activeNode != null && activeNode.fen.contains(' b ');
 
@@ -692,7 +689,7 @@ class _BoardWithEval extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final evalsAsync = ref.watch(combinedEvalProvider);
+    final liveEvals = ref.watch(combinedEvalProvider);
     final activeNode = ref.watch(activeNodeProvider);
     final isRunning = ref.watch(engineRunningProvider);
     final isFlipped = ref.watch(boardFlippedProvider);
@@ -702,13 +699,11 @@ class _BoardWithEval extends ConsumerWidget {
     double evaluation = activeNode?.evaluation ?? 0.0;
     int? mate = activeNode?.mate;
 
-    // Only apply live engine evals when they are confirmed fresh for this
-    // position — prevents the bar from flickering to the wrong side during
-    // the one-frame gap where activeNode has updated but the stream still
-    // carries the previous position's data.
-    final evalsAreFresh = ref.watch(evalAreFreshProvider);
-    if (isRunning && evalsAreFresh && evalsAsync.hasValue && evalsAsync.value!.isNotEmpty) {
-      final eval = evalsAsync.value!.first;
+    // combinedEvalProvider only yields evals matching this position's FEN, so
+    // the bar can never flicker to the wrong side during the gap where
+    // activeNode has updated but a source still carries the previous position.
+    if (isRunning && liveEvals.isNotEmpty) {
+      final eval = liveEvals.first;
       evaluation = eval.scoreCp;
       mate = eval.mate;
 

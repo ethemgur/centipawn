@@ -131,7 +131,7 @@ class _ChessBoardState extends ConsumerState<ChessBoard> {
     final fen = activeNode?.fen ?? startFen;
 
     final isFlipped = ref.watch(boardFlippedProvider);
-    final evalsAsync = ref.watch(combinedEvalProvider);
+    final liveEvals = ref.watch(combinedEvalProvider);
     final isEngineRunning = ref.watch(engineRunningProvider);
     final showThreat = ref.watch(showThreatArrowProvider);
     final isEditMode = ref.watch(boardEditModeProvider);
@@ -165,10 +165,9 @@ class _ChessBoardState extends ConsumerState<ChessBoard> {
     }
 
     // Merge engine shapes + user shapes + live drag preview.
-    final engineShapes =
-        (isEngineRunning && evalsAsync.hasValue && evalsAsync.value!.isNotEmpty)
-            ? _buildEngineShapes(evalsAsync.value!, showThreat)
-            : ISet<Shape>();
+    final engineShapes = (isEngineRunning && liveEvals.isNotEmpty)
+        ? _buildEngineShapes(liveEvals, showThreat)
+        : ISet<Shape>();
 
     final allShapesList = <Shape>[
       ...engineShapes,

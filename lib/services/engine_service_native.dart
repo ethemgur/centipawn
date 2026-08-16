@@ -8,9 +8,9 @@ import 'move_evaluator.dart';
 class EngineService {
   Stockfish? _stockfish;
   StreamSubscription? _stdoutSubscription;
-  final _evaluationController = StreamController<List<EngineEvaluation>>.broadcast();
+  final _evaluationController = StreamController<PositionEvals>.broadcast();
 
-  Stream<List<EngineEvaluation>> get evaluationStream => _evaluationController.stream;
+  Stream<PositionEvals> get evaluationStream => _evaluationController.stream;
   bool get isReady => _stockfish != null;
 
   /// True when a Stockfish instance was created successfully, i.e. the scores
@@ -65,6 +65,9 @@ class EngineService {
   // position's eval into the new one.
   int _searchGeneration = 0;
   int _activeSearchGeneration = 0;
+  // FEN of the search whose info lines are currently being accepted. Emitted
+  // with every batch so consumers can tell which position an eval describes.
+  String _analyzingFen = '';
 
   void _handleEngineOutput(String line) {
     final trimmed = line.trim();
@@ -134,7 +137,7 @@ class EngineService {
       
       final sortedKeys = _currentEvals.keys.toList()..sort();
       final evals = sortedKeys.map((k) => _currentEvals[k]!).toList();
-      _evaluationController.add(evals);
+      _evaluationController.add(PositionEvals(_analyzingFen, evals));
     }
   }
 
@@ -152,7 +155,9 @@ class EngineService {
     // While we drain the prior search, ignore any info lines that arrive.
     _activeSearchGeneration = 0;
     _currentEvals.clear();
-    _evaluationController.add([]);
+    // Empty batch tagged with the new FEN: clears the previous position's evals
+    // without ever claiming to have analysed this one.
+    _evaluationController.add(PositionEvals(fen, const []));
     _sendCommand('stop');
 
     // Wait for Stockfish to flush bestmove/info from the prior search before
@@ -172,6 +177,7 @@ class EngineService {
 
     _sendCommand('setoption name MultiPV value 1');
     _sendCommand('position fen $fen');
+    _analyzingFen = fen;
     _activeSearchGeneration = gen;
     _sendCommand('go infinite');
   }

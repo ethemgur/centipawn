@@ -38,8 +38,8 @@ gameListProvider ──(user taps a game)──► selectedGameProvider
                                               ├──► cloudEvalProvider ──┤
                                               │        (one-shot)      ▼
                                               │                combinedEvalProvider ──► board arrows,
-                                              │                        ▲                eval bar,
-                                              │                evalAreFreshProvider     analysis box
+                                              │                (FEN-matched only)       eval bar,
+                                              │                                         analysis box
                                               │
                                               ▼
                                         reviewProvider ──► writes evals onto MoveNodes,
@@ -105,13 +105,15 @@ Wraps the `stockfish` pub package.
   `_searchGeneration`; info lines whose generation doesn't match
   `_activeSearchGeneration` are dropped. Without this, the tail Stockfish flushes
   after `stop` leaks the previous position's eval into the new one. The call also
-  emits an empty list on the stream, sends `stop`, waits for `readyok` (2 s timeout),
-  then `setoption MultiPV 1` + `position fen` + `go infinite`.
+  emits an empty batch on the stream, sends `stop`, waits for `readyok` (2 s timeout),
+  then `setoption MultiPV 1` + `position fen` + `go infinite`, recording the FEN in
+  `_analyzingFen` so every emitted batch is tagged with the position it describes.
 - `evaluatePosition(fen, depth:)` — one-shot depth-limited search used by the review.
   Completes on `bestmove`, and only when `_expectingBestmove` is set, so the
   `bestmove` emitted by a `stop` doesn't resolve the wrong future.
 - Parsed `info` lines become `EngineEvaluation(scoreCp /* pawns */, mate, pv, depth)`
-  keyed by `multipv` index and pushed to `evaluationStream` sorted by index.
+  keyed by `multipv` index and pushed to `evaluationStream` sorted by index, wrapped
+  in a `PositionEvals(fen, evals)`.
 
 Note `analyzePosition` sets `MultiPV 1` even though init sets 3; the multi-line
 arrows on the board come from whatever the current setting yields plus the cloud
@@ -120,9 +122,13 @@ provider's `multiPv: 3`.
 ### Web (`engine_service_web.dart`)
 
 A stub. No Stockfish ships with the web build: `isAvailable`/`isReady` are `false`,
-`analyzePosition` and `stop` do nothing, `evaluatePosition` returns `scoreCp: 0`.
-Callers **must** check `isAvailable` before trusting a score — `ReviewNotifier._fetchEval`
-does exactly that and returns `null` instead.
+`analyzePosition` and `stop` do nothing, `evaluatePosition` returns `scoreCp: 0`, and
+`evaluationStream` **never emits**. Callers **must** check `isAvailable` before
+trusting a score — `ReviewNotifier._fetchEval` does exactly that and returns `null`
+instead — and must never gate the display of an eval on the local stream having
+produced something, or the whole feature silently disappears on web. (That was a
+real bug: the eval bar and the suggested-lines box were dead on web while the board
+arrows, which read `combinedEvalProvider` directly, worked fine.)
 
 ### Cloud (`cloud_eval_service.dart`)
 
@@ -138,15 +144,24 @@ does exactly that and returns `null` instead.
 
 ### Merging local + cloud
 
-`combinedEvalProvider` watches both and returns whichever principal variation has
-the greater `depth`. In practice the local engine fills the first few hundred
-milliseconds, the cloud result (depth 30+) takes over when it lands, and the local
-engine wins again if it out-searches it.
+Both sources hand back a **`PositionEvals(fen, evals)`** — the evals plus the FEN
+they were computed for. That tagging is what makes staleness checkable: a
+`FutureProvider` keeps serving its previous value while it reloads, and a stream
+keeps its last event until the next one arrives, so either source can otherwise hand
+back the previous position's numbers after the user has already moved on.
 
-`evalAreFreshProvider` is a separate guard: it flips to `false` the moment
-`activeNodeProvider`'s FEN changes and back to `true` only when the engine stream
-emits a non-empty list. Widgets use it so they never render the previous position's
-eval with the new position's side-to-move correction applied.
+`combinedEvalProvider` watches both, discards whichever does not match
+`activeNodeProvider`'s FEN, and of the rest returns the one with the greater `depth`
+— as a plain `List<EngineEvaluation>`, empty when nothing has evaluated the current
+position. In practice the local engine fills the first few hundred milliseconds, the
+cloud result (depth 30+) takes over when it lands, and the local engine wins again if
+it out-searches it. **On web the cloud is the only source**, so nothing downstream may
+require the local stream to have emitted.
+
+Because a non-empty result is by construction for the current position, widgets can
+render it directly — there is no separate freshness flag to consult. Anything that
+needs "is this eval for the board I'm showing?" should compare FENs, via
+`PositionEvals.matches(fen)`.
 
 ## Platform-conditional files
 

@@ -23,15 +23,22 @@ class EvalBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final targetRatio = _targetRatio();
 
+    // Round before deciding whether to show a score: an eval of 0.04 renders as
+    // "0.0", which reads as dead-equal and is not worth a label.
+    final double rounded = (evaluation * 10).roundToDouble() / 10;
+
     final String label;
     if (mate != null) {
       label = 'M${mate!.abs()}';
     } else {
-      label = evaluation.abs().toStringAsFixed(1);
+      label = rounded.abs().toStringAsFixed(1);
     }
 
-    final bool whiteLabel = evaluation > 0.3 || (mate != null && mate! > 0);
-    final bool blackLabel = evaluation < -0.3 || (mate != null && mate! < 0);
+    // Show the score on the leading side's section for *any* non-zero eval —
+    // a 0.1 edge is still information. Only an exactly level position (and the
+    // pre-analysis default of 0.0) goes unlabelled.
+    final bool whiteLabel = rounded > 0 || (mate != null && mate! > 0);
+    final bool blackLabel = rounded < 0 || (mate != null && mate! < 0);
 
     return SizedBox(
       width: 24,
