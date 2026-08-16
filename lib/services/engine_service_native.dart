@@ -13,6 +13,10 @@ class EngineService {
   Stream<List<EngineEvaluation>> get evaluationStream => _evaluationController.stream;
   bool get isReady => _stockfish != null;
 
+  /// True when a Stockfish instance was created successfully, i.e. the scores
+  /// coming back from [evaluatePosition] are real analysis.
+  bool get isAvailable => _stockfish != null;
+
   EngineService() {
     _initEngine();
   }

@@ -523,6 +523,12 @@ class ReviewProgress {
   final bool isCompleted;
   final double? whiteAccuracy;
   final double? blackAccuracy;
+
+  /// Mainline moves no evaluation source could rate (position not in the
+  /// Lichess cloud cache and no local engine available — the web build has
+  /// no Stockfish). Those moves are left unclassified rather than guessed at.
+  final int unevaluatedMoves;
+
   ReviewProgress({
     required this.total,
     required this.current,
@@ -530,6 +536,7 @@ class ReviewProgress {
     this.isCompleted = false,
     this.whiteAccuracy,
     this.blackAccuracy,
+    this.unevaluatedMoves = 0,
   });
 }
 
@@ -547,6 +554,8 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
     required bool isWhiteToMove,
   }) {
     if (eval.mate != null) {
+      // `mate: 0` means the side to move has just been mated, so it counts as
+      // a negative mate score for that side (same as Stockfish's output).
       final mateSign = eval.mate! > 0 ? 1 : -1;
       final whiteMateSign = isWhiteToMove ? mateSign : -mateSign;
       return whiteMateSign * 10000;
@@ -555,10 +564,43 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
     return isWhiteToMove ? cp : -cp;
   }
 
-  double _calcAccuracy(double totalWpDrop, int moveCount) {
-    if (moveCount == 0) return 100.0;
+  /// Returns null when no move on that side could be evaluated, so the UI can
+  /// hide the badge instead of showing a fabricated 100%.
+  double? _calcAccuracy(double totalWpDrop, int moveCount) {
+    if (moveCount == 0) return null;
     final avg = totalWpDrop / moveCount;
     return (103.1668 * exp(-0.04354 * avg) - 3.1668).clamp(0.0, 100.0);
+  }
+
+  /// Side to move in [fen]. Read from the position itself rather than from the
+  /// node's depth in the tree, so games that start from a black-to-move FEN
+  /// don't get every evaluation sign-flipped.
+  bool _isWhiteToMove(String fen) {
+    final parts = fen.split(' ');
+    return parts.length < 2 || parts[1] == 'w';
+  }
+
+  /// Evaluation for a position that is already over. Checkmate is reported as
+  /// `mate: 0` from the side-to-move's perspective (matching what Stockfish
+  /// prints for a mated position); stalemate and dead draws are 0.00.
+  ///
+  /// Without this, the final position of a decisive game gets no eval at all
+  /// on web (Lichess doesn't cache mated positions and the stub engine returns
+  /// 0.00), which reads as "the mating move threw away a won game".
+  EngineEvaluation? _terminalEval(String fen) {
+    Position pos;
+    try {
+      pos = Chess.fromSetup(Setup.parseFen(fen));
+    } catch (_) {
+      return null;
+    }
+    if (pos.isCheckmate) {
+      return EngineEvaluation(scoreCp: 0, mate: 0, depth: 99);
+    }
+    if (pos.isStalemate || pos.isInsufficientMaterial) {
+      return EngineEvaluation(scoreCp: 0, depth: 99);
+    }
+    return null;
   }
 
   /// Tries the Lichess cloud-eval cache first; falls back to the local engine.
@@ -567,13 +609,22 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
   /// positions (most openings and common middlegame positions). If the cloud
   /// returns nothing — position not cached, network down, or depth too shallow
   /// — we evaluate locally at [localDepth].
-  Future<EngineEvaluation> _fetchEval(
+  ///
+  /// Returns null when neither source can answer: on web there is no local
+  /// Stockfish, and its stub returns a 0.00 score that would otherwise be
+  /// mistaken for a dead-equal position and produce huge phantom eval swings.
+  Future<EngineEvaluation?> _fetchEval(
     EngineService engine,
     String fen, {
     required int localDepth,
   }) async {
+    final terminal = _terminalEval(fen);
+    if (terminal != null) return terminal;
+
     final cloud = await CloudEvalService.evaluateBest(fen);
     if (cloud != null) return cloud;
+
+    if (!engine.isAvailable) return null;
     return engine.evaluatePosition(fen, depth: localDepth);
   }
 
@@ -618,16 +669,23 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
       isRunning: true,
     );
 
-    // Evaluate the root position (White to move).
+    // Evaluate the starting position. A null eval means no source could rate
+    // the position — every eval-derived number stays null until a real
+    // evaluation arrives, so nothing is measured against a guess.
+    final rootWhiteToMove = _isWhiteToMove(tree.root.fen);
     final rootEval = await _fetchEval(engine, tree.root.fen, localDepth: depth);
-    int prevCpWhite = _toCpWhitePerspective(rootEval, isWhiteToMove: true);
+    int? prevCpWhite = rootEval == null
+        ? null
+        : _toCpWhitePerspective(rootEval, isWhiteToMove: rootWhiteToMove);
     String? prevBestMoveUci =
-        rootEval.pv.isNotEmpty ? rootEval.pv.first : null;
-    double prevBestEvalWhite = prevCpWhite / 100.0;
-    int? prevBestMateWhite = rootEval.mate;
+        (rootEval != null && rootEval.pv.isNotEmpty) ? rootEval.pv.first : null;
+    final rootMate = rootEval?.mate;
+    int? prevBestMateWhite =
+        rootMate == null ? null : (rootWhiteToMove ? rootMate : -rootMate);
 
     double whiteTotalDrop = 0, blackTotalDrop = 0;
     int whiteMoveCount = 0, blackMoveCount = 0;
+    int unevaluated = 0;
 
     // Horizon-shift redistribution state. When a move that *matched* the
     // engine's top recommendation later shows an eval drop, that drop is the
@@ -645,26 +703,72 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
     for (int i = 0; i < mainline.length; i++) {
       final node = mainline[i];
 
-      final isWhiteToMove = node.isBlackMove;
-      final isWhiteMove = !node.isBlackMove;
+      // node.fen is the position *after* the move, so the side to move there
+      // is the opponent of whoever played it.
+      final isWhiteToMove = _isWhiteToMove(node.fen);
+      final isWhiteMove = !isWhiteToMove;
 
-      // Snapshot the engine's top move from the previous position before we
-      // overwrite prevBestMoveUci with this node's eval.
-      final prevBestMoveUciAtStart = prevBestMoveUci;
+      // Snapshot the parent position's numbers before this node's eval
+      // overwrites them — they describe what the mover could have played
+      // instead, which is what MoveNode.bestMove* document.
+      final parentBestUci = prevBestMoveUci;
+      final parentEvalWhite =
+          prevCpWhite == null ? null : prevCpWhite / 100.0;
+      final parentMateWhite = prevBestMateWhite;
 
       final eval = await _fetchEval(engine, node.fen, localDepth: depth);
+
+      node.bestMoveUci = parentBestUci;
+      node.bestMoveEval = parentEvalWhite;
+      node.bestMoveMate = parentMateWhite;
+
+      if (eval == null) {
+        // Nothing could evaluate this position. Leave the move unclassified
+        // and break the eval chain — a fabricated score here would show up as
+        // a huge drop on this move and on the next one.
+        unevaluated++;
+        node.evaluation = null;
+        node.mate = null;
+        node.quality = null;
+        prevCpWhite = null;
+        prevBestMoveUci = null;
+        prevBestMateWhite = null;
+        whiteLastDevIdx = null;
+        blackLastDevIdx = null;
+
+        state = ReviewProgress(
+          total: mainline.length + 1,
+          current: i + 2,
+          isRunning: true,
+        );
+        continue;
+      }
+
       final cpWhite = _toCpWhitePerspective(eval, isWhiteToMove: isWhiteToMove);
       final matchedEngineTop =
-          node.uci != null && node.uci == prevBestMoveUciAtStart;
+          node.uci != null && node.uci == parentBestUci;
 
       node.mate = eval.mate != null
           ? (isWhiteToMove ? eval.mate! : -eval.mate!)
           : null;
 
       prevBestMoveUci = eval.pv.isNotEmpty ? eval.pv.first : null;
-      prevBestMateWhite = eval.mate != null
-          ? (isWhiteToMove ? eval.mate! : -eval.mate!)
-          : null;
+      prevBestMateWhite = node.mate;
+
+      if (prevCpWhite == null) {
+        // The position before this move has no eval (start of the game or
+        // just after a gap), so there is no drop to measure against.
+        node.evaluation = cpWhite / 100.0;
+        node.quality = null;
+        prevCpWhite = cpWhite;
+
+        state = ReviewProgress(
+          total: mainline.length + 1,
+          current: i + 2,
+          isRunning: true,
+        );
+        continue;
+      }
 
       // Raw WP drop from this player's perspective.
       final wpBefore = MoveEvaluator.cpToWinProb(prevCpWhite);
@@ -720,11 +824,6 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
         }
       }
       node.evaluation = cpWhite / 100.0;
-      node.bestMoveUci = prevBestMoveUci;
-      node.bestMoveEval = prevBestEvalWhite;
-      node.bestMoveMate = prevBestMateWhite;
-
-      prevBestEvalWhite = cpWhite / 100.0;
       prevCpWhite = cpWhite;
 
       state = ReviewProgress(
@@ -744,6 +843,7 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
       isCompleted: true,
       whiteAccuracy: whiteAccuracy,
       blackAccuracy: blackAccuracy,
+      unevaluatedMoves: unevaluated,
     );
 
     // Persist tree + metadata.

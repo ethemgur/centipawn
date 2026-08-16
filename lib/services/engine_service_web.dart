@@ -7,6 +7,11 @@ class EngineService {
   Stream<List<EngineEvaluation>> get evaluationStream => _evaluationController.stream;
   bool get isReady => false;
 
+  /// No Stockfish build ships with the web app, so nothing here can actually
+  /// evaluate a position — [evaluatePosition] returns a placeholder. Callers
+  /// must check this before treating a returned score as real analysis.
+  bool get isAvailable => false;
+
   EngineService();
 
   void analyzePosition(String fen) {

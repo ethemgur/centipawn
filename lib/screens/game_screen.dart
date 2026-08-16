@@ -58,11 +58,18 @@ class GameScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     ref.listen<ReviewProgress>(reviewProvider, (previous, next) {
       if (!next.isRunning && next.isCompleted && (previous?.isRunning ?? false)) {
+        final skipped = next.unevaluatedMoves;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Analysis complete!'),
+          SnackBar(
+            content: Text(
+              skipped == 0
+                  ? 'Analysis complete!'
+                  : 'Analysis complete — $skipped '
+                      '${skipped == 1 ? 'position' : 'positions'} '
+                      'could not be evaluated',
+            ),
             behavior: SnackBarBehavior.floating,
-            duration: Duration(seconds: 4),
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -212,22 +219,54 @@ class _GameBody extends ConsumerWidget {
   final bool isFoldFlexMode;
   const _GameBody({this.isFoldFlexMode = false});
 
+  /// Minimum width-to-height ratio of the body before the 3-column layout is
+  /// worth using. Each column only gets a third of the width, so on a square
+  /// or portrait-ish viewport (a resized browser window, a tablet) that leaves
+  /// a cramped board — those get the 2-column board/notation split instead.
+  static const double _threeColumnMinAspect = 1.5;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final mq = MediaQuery.of(context);
-
-    // Landscape on a real screen uses its own 3-column layout.
     // Fold flex mode keeps the existing top/bottom pane layout.
-    if (mq.orientation == Orientation.landscape && !isFoldFlexMode) {
-      return _buildLandscapeLayout(context, ref, mq);
-    }
+    if (isFoldFlexMode) return _buildStackedLayout(context, ref);
 
+    // Measure the actual body box (excludes app bar and bottom nav) rather
+    // than the raw screen orientation: a 1000×1000 browser window counts as
+    // "landscape" but is nowhere near wide enough for three columns.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final height = constraints.maxHeight;
+        final isWide =
+            height > 0 && width / height >= _threeColumnMinAspect;
+
+        if (isWide) {
+          return _buildLandscapeLayout(context, ref, constraints);
+        }
+        // Keep the board (and both player bars) inside the viewport instead of
+        // letting a 60%-of-width board push the lower bar off-screen.
+        return _buildStackedLayout(
+          context,
+          ref,
+          maxBoardSize: height > 140 ? height - 60 : null,
+        );
+      },
+    );
+  }
+
+  /// Board (plus chart/toolbars) alongside the notation on wide-enough
+  /// screens, stacked vertically on phones — see [ResponsiveLayout].
+  Widget _buildStackedLayout(
+    BuildContext context,
+    WidgetRef ref, {
+    double? maxBoardSize,
+  }) {
     return ResponsiveLayout(
       boardWidget: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           const _PlayerBar(isTop: true),
-          const _BoardWithEval(),
+          _BoardWithEval(maxSize: maxBoardSize),
           const _PlayerBar(isTop: false),
           if (!isFoldFlexMode) const EvalChart(),
           if (!isFoldFlexMode) _buildBoardToolbar(context, ref),
@@ -242,60 +281,57 @@ class _GameBody extends ConsumerWidget {
     );
   }
 
-  Widget _buildLandscapeLayout(BuildContext context, WidgetRef ref, MediaQueryData mq) {
-    // Use LayoutBuilder so we get the actual body dimensions from the Scaffold,
-    // not an estimate — this eliminates the overflow caused by AppBar/nav rounding.
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final availableWidth = constraints.maxWidth;
-        final availableHeight = constraints.maxHeight;
+  Widget _buildLandscapeLayout(
+      BuildContext context, WidgetRef ref, BoxConstraints constraints) {
+    // Constraints come from the Scaffold body, not an estimate — this
+    // eliminates the overflow caused by AppBar/nav rounding.
+    final availableWidth = constraints.maxWidth;
+    final availableHeight = constraints.maxHeight;
 
-        // Equal thirds minus the 2 one-pixel dividers.
-        final colWidth = (availableWidth - 2) / 3;
+    // Equal thirds minus the 2 one-pixel dividers.
+    final colWidth = (availableWidth - 2) / 3;
 
-        // Board must fit both the column width (minus the 24 px eval-bar strip)
-        // and the column height (minus two player bars, measured at 30 px each).
-        final boardSize = math.max(
-          80.0,
-          math.min(colWidth - 24, availableHeight - 30.0 * 2),
-        );
+    // Board must fit both the column width (minus the 24 px eval-bar strip)
+    // and the column height (minus two player bars, measured at 30 px each).
+    final boardSize = math.max(
+      80.0,
+      math.min(colWidth - 24, availableHeight - 30.0 * 2),
+    );
 
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // ── Left column: eval chart → spacer → toolbar → color picker → engine lines ──
-            SizedBox(
-              width: colWidth,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const EvalChart(),
-                  const Spacer(),
-                  _buildBoardToolbar(context, ref),
-                  const _BoardEditToolbar(),
-                  const _EngineAnalysisBox(),
-                ],
-              ),
-            ),
-            const VerticalDivider(width: 1, thickness: 1, color: AppColors.divider),
-            // ── Center column: player bar → board → player bar ──
-            SizedBox(
-              width: colWidth,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const _PlayerBar(isTop: true),
-                  _BoardWithEval(forcedSize: boardSize),
-                  const _PlayerBar(isTop: false),
-                ],
-              ),
-            ),
-            const VerticalDivider(width: 1, thickness: 1, color: AppColors.divider),
-            // ── Right column: notation (Expanded takes the exact remainder) ──
-            Expanded(child: _NotationPanel()),
-          ],
-        );
-      },
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Left column: eval chart → spacer → toolbar → color picker → engine lines ──
+        SizedBox(
+          width: colWidth,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const EvalChart(),
+              const Spacer(),
+              _buildBoardToolbar(context, ref),
+              const _BoardEditToolbar(),
+              const _EngineAnalysisBox(),
+            ],
+          ),
+        ),
+        const VerticalDivider(width: 1, thickness: 1, color: AppColors.divider),
+        // ── Center column: player bar → board → player bar ──
+        SizedBox(
+          width: colWidth,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const _PlayerBar(isTop: true),
+              _BoardWithEval(forcedSize: boardSize),
+              const _PlayerBar(isTop: false),
+            ],
+          ),
+        ),
+        const VerticalDivider(width: 1, thickness: 1, color: AppColors.divider),
+        // ── Right column: notation (Expanded takes the exact remainder) ──
+        Expanded(child: _NotationPanel()),
+      ],
     );
   }
 
@@ -647,7 +683,12 @@ class _EngineAnalysisBoxState extends ConsumerState<_EngineAnalysisBox> {
 class _BoardWithEval extends ConsumerWidget {
   /// When provided (landscape 3-col layout), skips LayoutBuilder sizing.
   final double? forcedSize;
-  const _BoardWithEval({this.forcedSize});
+
+  /// Upper bound on the board's edge when sizing from the available width —
+  /// used to keep a wide board from growing taller than the viewport.
+  final double? maxSize;
+
+  const _BoardWithEval({this.forcedSize, this.maxSize});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -697,9 +738,13 @@ class _BoardWithEval extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final boardSize = constraints.maxWidth - 24;
+        var boardSize = constraints.maxWidth - 24;
+        if (maxSize != null && boardSize > maxSize!) {
+          boardSize = math.max(80.0, maxSize!);
+        }
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             SizedBox(
               width: 24,
