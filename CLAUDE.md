@@ -14,6 +14,13 @@ Dart SDK `^3.10.1`. Targets Android, iOS, web, Windows, macOS, Linux. The web bu
 is deployed to Firebase Hosting on every push to `main`
 (`.github/workflows/firebase-hosting-merge.yml`, Flutter 3.38.3, `--wasm`).
 
+## Git workflow
+
+Deployment is push-triggered off `main` — nothing else builds or ships the web app.
+After finishing a change on a branch, merge it into `main` and push `main` before
+ending the turn (fast-forward when possible; otherwise merge normally). A branch
+left unmerged has not shipped, no matter how complete the work looks.
+
 ## Common commands
 
 ```
