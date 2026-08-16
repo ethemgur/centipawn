@@ -216,14 +216,18 @@ extension type const SquareSet(int value) {
   }
 }
 
-// Split into two 32-bit halves so all literals stay within the range
-// JS doubles (and therefore dart2js/dart2wasm) can represent exactly —
-// the original 64-bit-literal version fails to compile for web targets.
+// Split into two 32-bit halves so all literals stay within the range JS
+// doubles (and therefore dart2js/dart2wasm) can represent exactly — the
+// original 64-bit-literal version fails to compile for web targets.
+//
+// Unlike the 64-bit version this replaces, Dart's `int * int` does not wrap
+// at 32 bits (it only wraps at 64), so the final multiply must be masked
+// explicitly or the classic SWAR byte-sum trick overflows into the result.
 int _popcnt32(int n) {
   final count2 = n - ((n >>> 1) & 0x55555555);
   final count4 = (count2 & 0x33333333) + ((count2 >>> 2) & 0x33333333);
   final count8 = (count4 + (count4 >>> 4)) & 0x0f0f0f0f;
-  return (count8 * 0x01010101) >>> 24;
+  return ((count8 * 0x01010101) & 0xffffffff) >>> 24;
 }
 
 int _popcnt64(int n) {

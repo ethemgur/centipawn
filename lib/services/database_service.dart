@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
@@ -28,8 +29,12 @@ class DatabaseService {
   }
 
   static Future<Database> _initDatabase() async {
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, 'centipawn.db');
+    // The web database factory has no real filesystem, so getDatabasesPath()
+    // isn't implemented there — just use the bare db name (it's stored in
+    // IndexedDB under that name).
+    final path = kIsWeb
+        ? 'centipawn.db'
+        : join(await getDatabasesPath(), 'centipawn.db');
 
     return await openDatabase(
       path,

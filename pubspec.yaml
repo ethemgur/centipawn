@@ -49,6 +49,7 @@ dependencies:
   shared_preferences: ^2.5.3
   http: ^1.2.2
   font_awesome_flutter: ^10.8.0
+  sqflite_common_ffi_web: ^1.1.1
 
 dependency_overrides:
   # Vendored copy of dartchess 0.12.3 with _popcnt64() patched to avoid

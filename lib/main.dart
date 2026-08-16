@@ -3,11 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'services/auth_service.dart';
+import 'services/database_factory_setup.dart';
 import 'theme.dart';
 import 'screens/game_list_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  setUpDatabaseFactory();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await AuthService.instance.ensureSignedIn();
   runApp(
