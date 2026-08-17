@@ -134,18 +134,24 @@ EngineService ──► UciEngine (protocol: guards, barriers, parsers, queue)
   transport), `setoption MultiPV 3`, `ucinewgame`, `isready`. Guarded by one
   completer so concurrent callers share a single load, with a 20 s timeout —
   the backstop that catches failure modes nothing else predicts.
-- `analyzePosition(fen)` — infinite search for live analysis. Bumps
+- `analyzePosition(fen, {multiPv = 3, maxDepth})` — live analysis. `maxDepth`
+  null means `go infinite`; the app always passes a bound, because an unbounded
+  search on the single-threaded web build never yields the core back. Bumps
   `_searchGeneration`; info lines whose generation doesn't match are dropped,
   or the tail flushed after `stop` leaks the previous position's eval into the
   new one. Emits an empty `PositionEvals` tagged with the new FEN first, so the
-  previous position clears without this one being claimed.
-- `evaluatePosition(fen, depth:)` — one-shot depth-limited search, used by the
-  review. Completes on `bestmove`, and only when `_expectingBestmove` is set, so
+  previous position clears without this one being claimed. When a bounded search
+  ends, the trailing `bestmove` is ignored (no pending completer), so the last
+  evals stay on the stream rather than the eval bar blanking.
+- `evaluatePosition(fen, depth:)` — one-shot depth-limited search at MultiPV 1.
+  Completes on `bestmove`, and only when `_expectingBestmove` is set, so
   the `bestmove` from a `stop` can't resolve the wrong future. Returns **null**
-  when nothing evaluated the position — never a 0.00 placeholder.
-- `runSearch(fen, depth:, multiPv:)` — the analysis-grade search behind
-  critical-moment detection. MultiPV plus `bestByDepth`, the best move at each
-  completed iteration (`upperbound`/`lowerbound` lines skipped — they are
+  when nothing evaluated the position — never a 0.00 placeholder. **The review no
+  longer uses this** (it needs the full `SearchResult` to fill the shared cache);
+  nothing in `lib/` calls it today.
+- `runSearch(fen, depth:, multiPv:)` — the analysis-grade search behind both the
+  review and critical-moment detection. MultiPV plus `bestByDepth`, the best move
+  at each completed iteration (`upperbound`/`lowerbound` lines skipped — they are
   unresolved and would read as the engine changing its mind). Serialised through
   a queue, bounded by a 90 s timeout that returns whatever depth was reached.
 
