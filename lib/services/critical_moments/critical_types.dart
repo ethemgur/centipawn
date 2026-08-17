@@ -53,10 +53,31 @@ const int kDeepDepth = 28;
 /// so the UI reports which depths produced a report rather than letting a web
 /// run pass for a native one.
 const int kShallowDepthWeb = 12;
-const int kDeepDepthWeb = 20;
+
+/// Was 20 originally, alongside `kDeepMultiPvWeb`; a real run at 20/5 (see
+/// that constant's doc) still ran to ~3 minutes on a sharp game even after
+/// narrowing MultiPV to 3. Depth turned out to be the bigger lever: the same
+/// game at 16/3 finished in ~62s, with the top-ranked moment unchanged from
+/// every earlier configuration — only the near-tied lower slots reorder.
+const int kDeepDepthWeb = 16;
 
 const int kShallowMultiPv = 3;
 const int kDeepMultiPv = 5;
+
+/// Web MultiPV widths. Measured in a browser against a real search (a 23-move
+/// tactical game, `stockfish-18-lite-single`, single-threaded): Stage A
+/// (depth 12, MultiPV 3) cost ~100-700ms a ply — fine. Stage B at the original
+/// depth 20 / MultiPV 5 cost **9-22 seconds a ply**, and a sharp game flags
+/// most plies for it — the whole sweep ran to ~230s (measured; not a hang).
+///
+/// Narrowing MultiPV 5 -> 3 alone cut that to ~180s (extra lines force extra
+/// re-searches with a narrower window each). Scoring never reads past
+/// `pvs[2]` (`gates.dart`'s conversion-technique check, guarded by a length
+/// check), so this costs nothing in fidelity; only the rare case where that
+/// guard would have seen a 4th/5th line degrades, gracefully. The bigger win
+/// came from also lowering `kDeepDepthWeb`; see its doc for the final number.
+const int kShallowMultiPvWeb = 3;
+const int kDeepMultiPvWeb = 3;
 
 // ---------------------------------------------------------------------------
 // Ply input

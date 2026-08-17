@@ -35,7 +35,7 @@ Structure:
 - `_CriticalMomentsBox` — top critical moments after an analyse run, or the
   reason there are none (no engine on this platform, or one that failed to
   load). Tapping a row jumps to that ply. The subtitle names the analysed side
-  and, when the depths were reduced, the depths used (`as White · depth 12/20`)
+  and, when the depths were reduced, the depths used (`as White · depth 12/16`)
   so a web report is never mistaken for a native one.
   See [critical-moments.md](critical-moments.md).
 - `_NotationPanel` — wraps `StudyNotation` and `EvalChart`.

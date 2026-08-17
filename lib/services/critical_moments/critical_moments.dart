@@ -43,6 +43,8 @@ class CriticalMoments {
     SearchCache? cache,
     int shallowDepth = kShallowDepth,
     int deepDepth = kDeepDepth,
+    int shallowMultiPv = kShallowMultiPv,
+    int deepMultiPv = kDeepMultiPv,
     void Function(AnalysisProgress)? onProgress,
   }) async {
     final plies = PlyBuilder.fromMainline(
@@ -58,6 +60,8 @@ class CriticalMoments {
       userSide,
       shallowDepth: shallowDepth,
       deepDepth: deepDepth,
+      shallowMultiPv: shallowMultiPv,
+      deepMultiPv: deepMultiPv,
       onProgress: onProgress,
     );
 

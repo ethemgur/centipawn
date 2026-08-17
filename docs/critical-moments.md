@@ -53,7 +53,7 @@ cloud-eval endpoint exposes neither, so this needs a **real engine**:
 | Platform | Status |
 | --- | --- |
 | Android, iOS | Stockfish via FFI, full depths |
-| Web | Stockfish WASM in a Worker, **reduced depths** (Stage A 12, Stage B 20) |
+| Web | Stockfish WASM in a Worker, **reduced depth and width** (Stage A depth 12/MultiPV 3, Stage B depth 16/MultiPV 3) |
 | Windows, macOS, Linux | no engine yet — `isSupported` is false |
 
 `analyze()` throws `StateError` when no engine can run or when one fails to
@@ -62,14 +62,25 @@ load, carrying the real reason; that surfaces as
 An empty list would read as "this game had no critical moments", which is a
 different and false claim.
 
-Web depths come from `kShallowDepthWeb`/`kDeepDepthWeb` and are threaded through
-`CriticalMoments.run` from `criticalMomentsProvider` — deliberately *not* from
-`critical_types.dart`, which imports neither Flutter nor the engine so that
+Web depths and MultiPV widths come from `kShallowDepthWeb`/`kDeepDepthWeb` and
+`kShallowMultiPvWeb`/`kDeepMultiPvWeb`, threaded through `CriticalMoments.run`
+from `criticalMomentsProvider` — deliberately *not* from `critical_types.dart`,
+which imports neither Flutter nor the engine so that
 `tool/validate_critical_moments.dart` still runs under a plain `dart run`.
 `CriticalMomentsState` carries the depths and `_CriticalMomentsBox` prints them
-(`as White · depth 12/20`), so a web report is never mistaken for a native one.
+(`as White · depth 12/16`), so a web report is never mistaken for a native one.
 Results at web depths are genuinely noisier: depth-to-settle is measured over a
 shorter range and Stage A flags a slightly different set of plies.
+
+**MultiPV width, not depth, was the first bottleneck found.** A real run
+against a 23-move tactical game measured Stage B (then depth 20, MultiPV 5) at
+9-22 **seconds** a ply — ~230s for one game. Narrowing MultiPV 5 → 3 (scoring
+never reads past `pvs[2]`, so this is free) got that to ~180s; the deep depth
+also coming down from 20 to 16 got the same game to ~62s, with the top-ranked
+moment unchanged throughout — see the constants' doc comments in
+`critical_types.dart` for the numbers. If web analysis ever feels slow again,
+measure before changing a constant — depth and MultiPV width do not cost the
+same, and Stage A was never the problem.
 
 A single search is bounded by a 90 s timeout that returns whatever depth was
 reached. Without it a wedged engine stalls the whole sweep with no symptom

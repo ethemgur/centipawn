@@ -1050,6 +1050,13 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
     // minutes. Recorded in state so a web report is never mistaken for native.
     final shallowDepth = kIsWeb ? kShallowDepthWeb : kShallowDepth;
     final deepDepth = kIsWeb ? kDeepDepthWeb : kDeepDepth;
+    // MultiPV width, not depth, turned out to be the dominant cost on web: a
+    // depth-20 MultiPV-5 search measured 9-22s each in a browser, and a sharp
+    // game flags most plies for it — several minutes for one game. Scoring
+    // never reads past pvs[2], so narrowing to 3 lines on web costs nothing in
+    // fidelity. See critical_types.dart for the measurement.
+    final shallowMultiPv = kIsWeb ? kShallowMultiPvWeb : kShallowMultiPv;
+    final deepMultiPv = kIsWeb ? kDeepMultiPvWeb : kDeepMultiPv;
 
     state = CriticalMomentsState(
       isRunning: true,
@@ -1067,6 +1074,8 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
         initialFen: tree.root.fen,
         shallowDepth: shallowDepth,
         deepDepth: deepDepth,
+        shallowMultiPv: shallowMultiPv,
+        deepMultiPv: deepMultiPv,
         onProgress: (p) {
           state = CriticalMomentsState(
             isRunning: true,

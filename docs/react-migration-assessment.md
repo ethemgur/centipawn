@@ -46,7 +46,7 @@ native Stockfish and inherits WASM speed.
 **2. It would make analysis slower where it currently works best.** Android/iOS
 run Stockfish via FFI with 3 threads and a 256 MB hash. The web build runs a
 single-threaded WASM engine with 32 MB — roughly an order of magnitude slower,
-which is exactly why web searches at depth 12/20 instead of 15/28. Going
+which is exactly why web searches at depth 12/16 instead of 15/28. Going
 web-tech everywhere means taking that penalty on the platforms that don't
 currently pay it.
 

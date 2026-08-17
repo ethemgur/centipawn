@@ -70,6 +70,8 @@ class CriticalMomentAnalyzer {
     Side userSide, {
     int shallowDepth = kShallowDepth,
     int deepDepth = kDeepDepth,
+    int shallowMultiPv = kShallowMultiPv,
+    int deepMultiPv = kDeepMultiPv,
     void Function(AnalysisProgress)? onProgress,
   }) async {
     if (!engine.isSupported) {
@@ -87,21 +89,22 @@ class CriticalMomentAnalyzer {
     }
 
     final analysable = plies.where((p) => !p.inBook).toList();
-    await _stageA(analysable, shallowDepth, onProgress);
+    await _stageA(analysable, shallowDepth, shallowMultiPv, onProgress);
 
     final flagged = flagForDeepAnalysis(analysable, userSide);
-    await _stageB(flagged, deepDepth, onProgress);
+    await _stageB(flagged, deepDepth, deepMultiPv, onProgress);
   }
 
   /// Stage A: every non-book ply at shallow depth.
   Future<void> _stageA(
     List<PlyData> plies,
     int depth,
+    int multiPv,
     void Function(AnalysisProgress)? onProgress,
   ) async {
     for (int i = 0; i < plies.length; i++) {
       final ply = plies[i];
-      ply.shallow = await _search(ply.fenBefore, depth, kShallowMultiPv);
+      ply.shallow = await _search(ply.fenBefore, depth, multiPv);
       onProgress?.call(AnalysisProgress(
         completed: i + 1,
         total: plies.length,
@@ -114,11 +117,12 @@ class CriticalMomentAnalyzer {
   Future<void> _stageB(
     List<PlyData> plies,
     int depth,
+    int multiPv,
     void Function(AnalysisProgress)? onProgress,
   ) async {
     for (int i = 0; i < plies.length; i++) {
       final ply = plies[i];
-      ply.deep = await _search(ply.fenBefore, depth, kDeepMultiPv);
+      ply.deep = await _search(ply.fenBefore, depth, multiPv);
       onProgress?.call(AnalysisProgress(
         completed: i + 1,
         total: plies.length,
