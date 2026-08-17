@@ -217,6 +217,9 @@ class _GameListScreenState extends ConsumerState<GameListScreen> {
           await ref.read(moveTreeProvider.notifier).loadFromDb(saved.id!);
           ref.invalidate(activeNodeProvider);
           ref.invalidate(reviewProvider);
+          // Moments are keyed by ply into *this* game's mainline; leaving the
+          // previous game's report would badge unrelated moves.
+          ref.invalidate(criticalMomentsProvider);
 
           if (context.mounted) {
             Navigator.of(context).push(
@@ -638,6 +641,9 @@ class _GameTile extends ConsumerWidget {
         await ref.read(moveTreeProvider.notifier).loadFromDb(game.id!);
         ref.invalidate(activeNodeProvider);
         ref.invalidate(reviewProvider);
+        // Moments are keyed by ply into *this* game's mainline; leaving the
+        // previous game's report would badge unrelated moves.
+        ref.invalidate(criticalMomentsProvider);
 
         if (game.isReviewed) {
           Future.microtask(

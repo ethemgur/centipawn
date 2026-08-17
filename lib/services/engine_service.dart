@@ -45,7 +45,10 @@ class EngineService {
   /// [unavailableReason].
   Future<bool> ensureReady() => _engine.ensureReady();
 
-  Future<void> analyzePosition(String fen) => _engine.analyzePosition(fen);
+  /// Live analysis, streaming [multiPv] lines to [evaluationStream] and
+  /// stopping at [maxDepth] (null searches until stopped).
+  Future<void> analyzePosition(String fen, {int multiPv = 3, int? maxDepth}) =>
+      _engine.analyzePosition(fen, multiPv: multiPv, maxDepth: maxDepth);
 
   /// Returns null when nothing could evaluate the position — never a 0.00
   /// placeholder, which would read as dead-equal and fabricate huge swings.

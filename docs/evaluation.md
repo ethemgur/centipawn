@@ -10,7 +10,8 @@ bar, eval chart, and move labels all lie in ways that look plausible.
 | Stockfish `info … score cp/mate` | side-to-move POV |
 | `EngineEvaluation.scoreCp` | **pawns**, side-to-move POV |
 | `EngineEvaluation.mate` | mate-in-N, side-to-move POV |
-| Lichess `/api/cloud-eval` response | White POV (converted to side-to-move inside `CloudEvalService`) |
+| `PvLine.scoreCp` | **raw centipawns**, side-to-move POV |
+| Lichess `/api/cloud-eval` response | White POV (converted to side-to-move inside `CloudEvalService`) — **currently unused**, see below |
 | `ReviewNotifier._toCpWhitePerspective` output | **centipawns, White POV**, mate = `±10000` |
 | `MoveNode.evaluation` | **pawns, White POV** |
 | `MoveNode.mate` | signed mate-in-N, White POV |
@@ -26,25 +27,55 @@ doesn't get every evaluation sign-flipped.
 
 ## Where an evaluation comes from
 
-`ReviewNotifier._fetchEval(engine, fen, localDepth:)`, in order:
+`ReviewNotifier._fetchEval(engine, fen, depth:)`, in order:
 
 1. **Terminal position** — `_terminalEval(fen)` asks dartchess. Checkmate →
    `EngineEvaluation(scoreCp: 0, mate: 0, depth: 99)`; stalemate or insufficient
-   material → `scoreCp: 0, depth: 99`. Neither the engine nor the cloud is consulted.
-   Without this, the final position of a decisive game gets no eval on web and the
+   material → `scoreCp: 0, depth: 99`. The engine is not consulted.
+   Without this, the final position of a decisive game gets no eval and the
    mating move looks like it threw away a won game.
-2. **Cloud** — `CloudEvalService.evaluateBest(fen)`. Typically depth 30–99, <100 ms
-   for cached positions.
+2. **Cloud** — `CloudEvalService.evaluateBest(fen)`, **skipped while
+   `kUseCloudEval` is false** (it is). See "Cloud eval is off" below.
 3. **Local engine** — `await engine.ensureReady()` (which lazily loads the wasm
-   module on web) then `evaluatePosition(fen, depth:)` at the user's review depth.
-   That call returns `EngineEvaluation?` and yields **null** rather than a 0.00
-   placeholder when nothing evaluated the position. Review depth is capped at 12
-   on web, where the engine is single-threaded wasm.
+   module on web) then `runSearch(fen, depth: depth, multiPv: kAnalysisMultiPv)`
+   at the depth from the settings slider (`analysisDepth(ref)`, capped at 12 on
+   web where the engine is single-threaded wasm). The raw `SearchResult` is
+   stored in `analysisCacheProvider`; `_toEvaluation` takes its top line and
+   converts **raw centipawns → pawns**. Returns **null** rather than a 0.00
+   placeholder when the search produced no lines.
 4. **`null`** — nothing could evaluate it: no engine on this platform
    (Windows/macOS/Linux today), or one that failed to load.
 
-Web used to stop at step 2, leaving every cloud miss unevaluated. It now has a
-real engine, so step 3 applies there too — slower, but actually evaluated.
+### Cloud eval is off
+
+`kUseCloudEval = false` in `study_provider.dart` disables the Lichess path in
+both `_fetchEval` and `cloudEvalProvider` (which returns `PositionEvals.none`
+immediately). `CloudEvalService` and the provider are left intact, so restoring
+it is a one-line change.
+
+Why: the cloud answers faster for cached positions but reports a single line and
+no per-depth best move, so it cannot fill the shared search cache. Mixing the two
+meant critical-moment detection had to re-search whatever the cloud had answered
+— paying twice for the same position. One engine as the single source also makes
+the numbers on the eval bar, in the review, and in critical moments agree.
+
+### One search, two consumers
+
+The review searches the root position plus the position after every mainline
+move. Critical-moment Stage A needs the position *before* every mainline move —
+which is the root plus `mainline[0..n-2].fen`, a subset. So the review caches
+every `SearchResult` under `(fen, depth, multiPv)` in `analysisCacheProvider`,
+and `CriticalMomentsNotifier.run` passes that same cache to `CriticalMoments.run`
+with a matching `shallowDepth`/`shallowMultiPv`. Stage A then costs nothing and
+only Stage B (deeper, flagged plies only) does real work.
+
+The reuse hinges on the two agreeing on the FEN string exactly;
+`test/critical_moments/cache_reuse_test.dart` pins that. A mismatch is not
+*wrong* — the cache misses and Stage A searches the game again — just twice as
+slow, silently.
+
+`startReview` clears the cache first, so re-analysing an edited game re-searches
+rather than replaying results for a tree that has since changed.
 
 A `null` eval is load-bearing. The node keeps `evaluation`/`mate`/`quality` null, the
 "previous eval" chain is broken (`prevCpWhite = null`), and the counter in

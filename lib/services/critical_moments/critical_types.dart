@@ -52,6 +52,10 @@ const int kDeepDepth = 28;
 /// over a shorter range and Stage A flags a slightly different set of plies —
 /// so the UI reports which depths produced a report rather than letting a web
 /// run pass for a native one.
+///
+/// Stage A no longer reads this directly — it runs at the review's depth so it
+/// can reuse the review's searches — but `analysisDepth()` caps the web review
+/// at this value, which is the same number for the same measured reason.
 const int kShallowDepthWeb = 12;
 
 /// Was 20 originally, alongside `kDeepMultiPvWeb`; a real run at 20/5 (see
@@ -76,6 +80,10 @@ const int kDeepMultiPv = 5;
 /// check), so this costs nothing in fidelity; only the rare case where that
 /// guard would have seen a 4th/5th line degrades, gracefully. The bigger win
 /// came from also lowering `kDeepDepthWeb`; see its doc for the final number.
+///
+/// [kShallowMultiPvWeb] is now only the default for direct
+/// `CriticalMomentAnalyzer` callers (the validation tool); the app passes
+/// `kAnalysisMultiPv`, which is the same 3, so Stage A hits the review's cache.
 const int kShallowMultiPvWeb = 3;
 const int kDeepMultiPvWeb = 3;
 

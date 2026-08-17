@@ -36,13 +36,37 @@ while weights are tuned. Keep it that way: `analysed_game.dart`,
 ## Where it runs from
 
 `criticalMomentsProvider` (in `study_provider.dart`) drives it. The game
-screen's **Analyse game** action runs the review first (cloud-backed, quick),
-then this pass. `_CriticalMomentsBox` under the board lists the top moments;
-tapping one jumps to that ply.
+screen's **Analyse game** action runs the review first, then this pass — that
+order matters, see "Stage A is free" below. The moments are badged onto the
+moves in the notation (via `criticalMomentsByPlyProvider`, keyed by mainline ply
+index); `_CriticalMomentsBox` under the board is now only progress, the
+unavailable reason, or a one-line summary.
 
 The analysed side comes from `myNamesProvider` — whichever player the user
 identifies with, falling back to White. Live analysis is toggled off for the
 duration, because it and this share one engine process.
+
+### Stage A is free
+
+Stage A searches the position *before* every non-book ply. The review has
+already searched exactly those positions — the root plus
+`mainline[0..n-2].fen` — so `CriticalMomentsNotifier.run` passes it the review's
+`analysisCacheProvider` and runs Stage A at the review's depth and width
+(`analysisDepth(ref)` and `kAnalysisMultiPv`) rather than at `kShallowDepth` /
+`kShallowMultiPv`. Every Stage A lookup then hits the cache and only Stage B
+does real work. Before this, a game was searched roughly twice over.
+
+Two things this depends on, both easy to break silently:
+
+- **The depth and width must match the review's.** A mismatch is not wrong, just
+  slow — the cache misses and Stage A searches the whole game again.
+- **The FEN strings must match byte for byte.** `PlyData.fenBefore` comes from
+  walking dartchess in `PlyBuilder`; the review caches under `MoveNode.fen`.
+  `test/critical_moments/cache_reuse_test.dart` pins that they agree.
+
+Stage B's depth is `max(kDeepDepth /* or kDeepDepthWeb */, shallowDepth + 4)`, so
+turning the settings slider up can't leave the "deep" pass at or below the
+shallow one.
 
 ## Engine requirement
 
@@ -52,8 +76,8 @@ cloud-eval endpoint exposes neither, so this needs a **real engine**:
 
 | Platform | Status |
 | --- | --- |
-| Android, iOS | Stockfish via FFI, full depths |
-| Web | Stockfish WASM in a Worker, **reduced depth and width** (Stage A depth 12/MultiPV 3, Stage B depth 16/MultiPV 3) |
+| Android, iOS | Stockfish via FFI, Stage A at the settings depth, Stage B at `kDeepDepth` |
+| Web | Stockfish WASM in a Worker, **reduced depth and width** (Stage A capped at depth 12/MultiPV 3, Stage B depth 16/MultiPV 3) |
 | Windows, macOS, Linux | no engine yet — `isSupported` is false |
 
 `analyze()` throws `StateError` when no engine can run or when one fails to
@@ -62,8 +86,8 @@ load, carrying the real reason; that surfaces as
 An empty list would read as "this game had no critical moments", which is a
 different and false claim.
 
-Web depths and MultiPV widths come from `kShallowDepthWeb`/`kDeepDepthWeb` and
-`kShallowMultiPvWeb`/`kDeepMultiPvWeb`, threaded through `CriticalMoments.run`
+Stage B's web depth and MultiPV width come from `kDeepDepthWeb` and
+`kDeepMultiPvWeb`, threaded through `CriticalMoments.run`
 from `criticalMomentsProvider` — deliberately *not* from `critical_types.dart`,
 which imports neither Flutter nor the engine so that
 `tool/validate_critical_moments.dart` still runs under a plain `dart run`.

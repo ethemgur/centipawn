@@ -430,7 +430,17 @@ class UciEngine {
     );
   }
 
-  Future<void> analyzePosition(String fen) async {
+  /// Live analysis of [fen], streaming to [evaluationStream].
+  ///
+  /// [multiPv] lines are reported; [maxDepth] bounds the search (null searches
+  /// until stopped). Bounding it means the engine settles and stops burning a
+  /// core — on the single-threaded web build an unbounded `go infinite` never
+  /// yields.
+  Future<void> analyzePosition(
+    String fen, {
+    int multiPv = 3,
+    int? maxDepth,
+  }) async {
     final gen = ++_searchGeneration;
     // While we drain the prior search, ignore any info lines that arrive.
     _activeSearchGeneration = 0;
@@ -452,11 +462,11 @@ class UciEngine {
     // Another analyzePosition call superseded us — bail.
     if (gen != _searchGeneration) return;
 
-    send('setoption name MultiPV value 1');
+    send('setoption name MultiPV value $multiPv');
     send('position fen $fen');
     _analyzingFen = fen;
     _activeSearchGeneration = gen;
-    send('go infinite');
+    send(maxDepth == null ? 'go infinite' : 'go depth $maxDepth');
   }
 
   /// One-shot depth-limited search.

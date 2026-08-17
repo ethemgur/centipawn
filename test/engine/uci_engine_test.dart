@@ -183,6 +183,40 @@ void main() {
     });
   });
 
+  group('live analysis width and depth', () {
+    // Live analysis used to hardcode `MultiPV 1` and `go infinite`, which is
+    // why the "Suggested lines" box only ever filled its first row, and why the
+    // single-threaded wasm build kept a core pinned forever on one position.
+
+    test('asks for the MultiPV it was given', () async {
+      final t = FakeUciTransport();
+      final engine = UciEngine(t);
+
+      await engine.analyzePosition(startFen, multiPv: 3);
+
+      expect(t.sent, contains('setoption name MultiPV value 3'));
+    });
+
+    test('bounds the search when a max depth is given', () async {
+      final t = FakeUciTransport();
+      final engine = UciEngine(t);
+
+      await engine.analyzePosition(startFen, maxDepth: 16);
+
+      expect(t.sent, contains('go depth 16'));
+      expect(t.sent, isNot(contains('go infinite')));
+    });
+
+    test('searches until stopped when no max depth is given', () async {
+      final t = FakeUciTransport();
+      final engine = UciEngine(t);
+
+      await engine.analyzePosition(startFen);
+
+      expect(t.sent, contains('go infinite'));
+    });
+  });
+
   group('generation guard', () {
     test('a superseded position never emits evals', () async {
       const fenB = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';

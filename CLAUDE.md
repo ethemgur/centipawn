@@ -5,8 +5,9 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## Project
 
 Centipawn is a Flutter chess study/analysis app. It imports PGN games, plays them
-out on an interactive board, evaluates positions (Lichess cloud eval first, local
-Stockfish as fallback — native via FFI, web via WebAssembly), and runs a "game review" that classifies every mainline
+out on an interactive board, evaluates positions (local Stockfish only — native
+via FFI, web via WebAssembly; the Lichess cloud-eval client is still there but
+switched off, see `kUseCloudEval`), and runs a "game review" that classifies every mainline
 move and computes per-side accuracy. State is Riverpod; games and their move trees
 are persisted in a local SQLite database via `sqflite`.
 
@@ -110,8 +111,15 @@ returned `Future<void>` on one platform and `void` on the other). Adding a
 platform now costs one transport and no protocol code.
 
 `EngineService` exposes `evaluationStream` (of `PositionEvals`), `ensureReady()`,
-`analyzePosition(fen)`, `evaluatePosition(fen, depth:)`, `runSearch(fen, depth:,
-multiPv:)`, `isSupported`, `isReady`, `unavailableReason`, `stop()`, `dispose()`.
+`analyzePosition(fen, multiPv:, maxDepth:)`, `evaluatePosition(fen, depth:)`,
+`runSearch(fen, depth:, multiPv:)`, `isSupported`, `isReady`,
+`unavailableReason`, `stop()`, `dispose()`.
+
+`analyzePosition` defaults to `multiPv: 3` and `maxDepth: null` (`go infinite`).
+The app always passes both: three lines is what the suggested-lines box shows,
+and bounding the depth is what stops the single-threaded web build pinning a core
+forever on one position. It used to hardcode `MultiPV 1` + `go infinite`, which
+is why only the first suggested line ever appeared.
 
 **Two score units, on purpose.** `EngineEvaluation.scoreCp` is in **pawns** (the
 eval bar and `combinedEvalProvider` consume them); `PvLine.scoreCp` is in **raw
@@ -158,18 +166,31 @@ Everything lives here. The providers that matter most:
 - `moveTreeProvider` — the tree; `loadFromDb`, `setTree`, `loadPgn`, `refresh`,
   `persist`.
 - `activeNodeProvider` — current position; `goForward/goBack/goFirst/goLast/setNode/
-  makeMove`. `setNode` kicks off `engine.analyzePosition(fen)` when the engine is on.
+  makeMove`. `setNode` kicks off `engine.analyzePosition(fen, multiPv:, maxDepth:)`
+  when the engine is on.
 - `engineRunningProvider` — live-analysis toggle (defaults **true**).
+- `kUseCloudEval` (**false**), `kAnalysisMultiPv` (3), `analysisDepth(ref)`,
+  `analysisCacheProvider` — the four knobs every analysis path reads. Cloud eval
+  is off; depth comes from the settings slider, capped at `kShallowDepthWeb` on
+  web; the cache is what stops the review and critical moments searching the same
+  positions twice. See `docs/evaluation.md`.
 - `engineEvaluationProvider` (stream, local) + `cloudEvalProvider` (one-shot,
-  Lichess) → merged by `combinedEvalProvider`. Both sources yield a
+  Lichess — currently short-circuits to `PositionEvals.none`) → merged by
+  `combinedEvalProvider`. Both sources yield a
   `PositionEvals(fen, evals)`; the merge drops anything whose FEN isn't the active
   node's, then picks the higher depth. Its result is therefore always for the
   current position — widgets render it directly, with no freshness flag.
-- `reviewProvider` — the game review; see `docs/evaluation.md`.
+- `reviewProvider` — the game review; see `docs/evaluation.md`. Searches at
+  `kAnalysisMultiPv` and fills `analysisCacheProvider`.
 - `criticalMomentsProvider` — critical-moment detection; see
-  `docs/critical-moments.md`. Native-only (needs `runSearch`), so on web it sets
-  `unavailableReason` instead of a report.
+  `docs/critical-moments.md`. Runs on Android/iOS/web; Stage A reuses the
+  review's cached searches, so only Stage B costs time. Desktop has no engine, so
+  it sets `unavailableReason` instead of a report.
+- `criticalMomentsByPlyProvider` — the moments keyed by mainline ply index, for
+  the notation badges.
 - `reviewDepthProvider`, `myNamesProvider` — persisted in `SharedPreferences`.
+  `reviewDepthProvider` drives *all* analysis despite the name; read it through
+  `analysisDepth(ref)`.
 - `customShapesProvider` — user circles/arrows keyed by `g<gameId>::<fen>`.
 - `boardFlippedProvider`, `boardEditModeProvider`, `drawColorProvider`,
   `showThreatArrowProvider`, `authStateProvider`.
@@ -177,7 +198,8 @@ Everything lives here. The providers that matter most:
 ### Engine eval convention
 
 Stockfish and `CloudEvalService` both hand back scores from the **side-to-move's**
-POV (`CloudEvalService` converts Lichess's White-POV numbers before returning).
+POV (`CloudEvalService` converts Lichess's White-POV numbers before returning;
+it is unused while `kUseCloudEval` is false).
 `ReviewNotifier._toCpWhitePerspective` normalizes to **centipawns from White's
 perspective**, mate included (`±10000`).
 

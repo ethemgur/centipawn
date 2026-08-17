@@ -10,10 +10,6 @@ import '../theme.dart';
 import '../models/game_entry.dart';
 import '../models/move_node.dart';
 import '../providers/study_provider.dart';
-import '../services/engine_types.dart';
-import '../services/critical_moments/critical_moments.dart'
-    show CriticalMoment, TimeVerdict;
-import '../services/move_evaluator.dart';
 import '../widgets/chess_board.dart';
 import '../widgets/study_notation.dart';
 import '../widgets/eval_bar.dart';
@@ -24,22 +20,6 @@ import '../services/pgn_parser.dart';
 
 enum _AppBarAction { analyse, export }
 
-
-int _evalCpGs(EngineEvaluation e) {
-  if (e.mate != null) return e.mate! > 0 ? 10000 : -10000;
-  return (e.scoreCp * 100).round();
-}
-
-List<EngineEvaluation> _filterByWinProbGs(List<EngineEvaluation> evals) {
-  if (evals.length <= 1) return evals;
-  final bestWp = MoveEvaluator.cpToWinProb(_evalCpGs(evals.first));
-  return [
-    evals.first,
-    ...evals.skip(1).where(
-          (e) => bestWp - MoveEvaluator.cpToWinProb(_evalCpGs(e)) <= 10.0,
-        ),
-  ];
-}
 
 IconData timeControlIcon(String tc) {
   switch (tc.toLowerCase()) {
@@ -572,7 +552,12 @@ class _EngineAnalysisBoxState extends ConsumerState<_EngineAnalysisBox> {
       return const SizedBox();
     }
 
-    final evals = _filterByWinProbGs(liveEvals);
+    // Every line the engine reports is shown. Filtering the alternatives by
+    // win-probability gap hid the 2nd and 3rd lines in exactly the positions
+    // where they are most interesting — a clearly best move with one plausible
+    // try behind it — and left the box looking broken. The board still filters
+    // its suggestion *arrows*, where clutter is the real cost.
+    final evals = liveEvals;
     final fen = activeNode?.fen ?? _startFen;
     final isBlackTurn = activeNode != null && activeNode.fen.contains(' b ');
 
@@ -688,14 +673,16 @@ class _EngineAnalysisBoxState extends ConsumerState<_EngineAnalysisBox> {
   }
 }
 
-/// The top critical moments, or the reason there aren't any to show.
+/// Status of the critical-moment pass: progress, why it couldn't run, or a
+/// one-line summary of what it found.
 ///
-/// Separate from `_EngineAnalysisBox`: that one describes the position in front
-/// of you, this one describes the game as a whole.
+/// The moments themselves are badged onto the moves in the notation, which is
+/// where they belong — a separate ranked list meant reading a move number here
+/// and then hunting for it there. This box keeps only what the notation cannot
+/// say: that a scan is running, that it failed, or that it finished and found
+/// nothing.
 class _CriticalMomentsBox extends ConsumerWidget {
   const _CriticalMomentsBox();
-
-  static const _rowHeight = 30.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -753,15 +740,28 @@ class _CriticalMomentsBox extends ConsumerWidget {
     final depths = state.isReducedDepth
         ? ' · depth ${state.shallowDepth}/${state.deepDepth}'
         : '';
+    final n = report.moments.length;
 
     return _shell(
       context,
       subtitle: 'as $side$depths',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final m in report.moments) _row(context, ref, m),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        child: Row(
+          children: [
+            Icon(Icons.crisis_alert,
+                size: 12, color: Colors.deepPurple.shade400),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                '$n move${n == 1 ? '' : 's'} marked in the notation — '
+                'tap a badge for why.',
+                style: const TextStyle(
+                    fontSize: 11, color: AppColors.textSecondary),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -801,81 +801,6 @@ class _CriticalMomentsBox extends ConsumerWidget {
         ],
       ),
     );
-  }
-
-  Widget _row(BuildContext context, WidgetRef ref, CriticalMoment m) {
-    final verdict = _verdictLabel(m.verdict);
-
-    return SizedBox(
-      height: _rowHeight,
-      child: InkWell(
-        onTap: () => _jumpTo(ref, m.ply),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 52,
-                child: Text(
-                  '${m.moveNumber}${m.side == Side.white ? '.' : '...'} '
-                  '${m.movePlayedSan}',
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w600),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              const SizedBox(width: 6),
-              // Criticality, not eval loss — a moment can rank high on a move
-              // that was played correctly.
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Text(
-                  '${m.criticalityPercentile.round()}',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.primary,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              if (verdict != null)
-                Expanded(
-                  child: Text(
-                    verdict.$1,
-                    style: TextStyle(fontSize: 10, color: verdict.$2),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                )
-              else
-                const Spacer(),
-              Icon(Icons.chevron_right,
-                  size: 14, color: AppColors.textSecondary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  static (String, Color)? _verdictLabel(TimeVerdict v) => switch (v) {
-        TimeVerdict.blindSpot => ('moved fast here', Colors.red.shade600),
-        TimeVerdict.wasted => ('long think', Colors.orange.shade700),
-        TimeVerdict.productiveThink =>
-          ('thought, then banked it', Colors.green.shade700),
-        TimeVerdict.normal => null,
-      };
-
-  /// Walks the mainline to [ply] and selects that node.
-  void _jumpTo(WidgetRef ref, int ply) {
-    final mainline = ref.read(moveTreeProvider).mainline;
-    if (ply < 0 || ply >= mainline.length) return;
-    ref.read(activeNodeProvider.notifier).setNode(mainline[ply]);
   }
 }
 

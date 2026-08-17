@@ -1,7 +1,10 @@
+import 'package:dartchess/dartchess.dart' show Side;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/move_node.dart';
 import '../providers/study_provider.dart';
+import '../services/critical_moments/critical_moments.dart'
+    show CriticalMoment, TimeVerdict;
 import '../services/engine_types.dart';
 import '../services/pgn_parser.dart';
 import '../theme.dart';
@@ -72,6 +75,10 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
     final pairs = <_MovePair>[];
     MoveNode? current = root;
     int moveNumber = 1;
+    // Index into the mainline, counting every half-move. Critical moments are
+    // reported against exactly this numbering (see `PlyBuilder`), so carrying
+    // it here is what lets a cell know whether it is one.
+    int ply = 0;
 
     while (current != null && current.children.isNotEmpty) {
       final mainChild = current.children.first;
@@ -99,12 +106,15 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
         number: moveNumber,
         whiteSan: mainChild.san,
         whiteNode: mainChild,
+        whitePly: ply,
         blackSan: blackSan,
         blackNode: blackNode,
+        blackPly: blackNode == null ? null : ply + 1,
         whiteVariations: whiteVariations,
         blackVariations: blackVariations,
       ));
       moveNumber++;
+      ply += blackNode == null ? 1 : 2;
     }
     return pairs;
   }
@@ -119,6 +129,10 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
 
     Widget buildRow(MoveNode? whiteNode, String? whiteSan, MoveNode? blackNode,
         String? blackSan, bool showWhiteDots, bool showBlackDots) {
+      // Null when only one side's move is rendered on this row, so the other
+      // cell can't pick up its neighbour's badge.
+      final whitePly = whiteSan == null ? null : pair.whitePly;
+      final blackPly = blackSan == null ? null : pair.blackPly;
       return Container(
         decoration: BoxDecoration(
           border: Border(
@@ -148,7 +162,7 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
               Expanded(
                 child: whiteSan != null
                     ? _buildMoveCell(
-                        whiteNode!, whiteSan, activeNode, ref, context)
+                        whiteNode!, whiteSan, whitePly, activeNode, ref, context)
                     : (showWhiteDots
                         ? const Padding(
                             padding: EdgeInsets.symmetric(
@@ -164,7 +178,7 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
               Expanded(
                 child: blackSan != null
                     ? _buildMoveCell(
-                        blackNode!, blackSan, activeNode, ref, context)
+                        blackNode!, blackSan, blackPly, activeNode, ref, context)
                     : (showBlackDots
                         ? const Padding(
                             padding: EdgeInsets.symmetric(
@@ -232,11 +246,14 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
   Widget _buildMoveCell(
     MoveNode node,
     String san,
+    int? ply,
     MoveNode? activeNode,
     WidgetRef ref,
     BuildContext context,
   ) {
     final isActive = node == activeNode;
+    final moment =
+        ply == null ? null : ref.watch(criticalMomentsByPlyProvider)[ply];
     // Derive quality from explicit field first, then fall back to glyphs NAG.
     final effectiveQuality = node.quality ??
         (node.glyphs.isNotEmpty ? _nagToQuality(node.glyphs.last) : null);
@@ -287,6 +304,11 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
                 ),
               ),
             ),
+          if (moment != null)
+            _CriticalMomentBadge(
+              moment: moment,
+              onTap: () => _showCriticalMoment(context, moment),
+            ),
         ],
       ),
     );
@@ -297,6 +319,79 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
       child: cell,
     );
   }
+
+  /// Why this move was flagged. The badge alone says "something happened here";
+  /// the number that matters — criticality, not eval loss — needs a surface,
+  /// and it is the part people misread as "you blundered".
+  void _showCriticalMoment(BuildContext context, CriticalMoment moment) {
+    final verdict = _verdictLabel(moment.verdict);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.crisis_alert,
+                      size: 18, color: Colors.deepPurple.shade400),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${moment.moveNumber}'
+                    '${moment.side == Side.white ? '.' : '...'} '
+                    '${_formatSan(moment.movePlayedSan)}',
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Criticality ${moment.criticalityPercentile.round()} of 100 '
+                'for this game — how much the position hinged on the choice, '
+                'not how well it was played.',
+                style: const TextStyle(
+                    fontSize: 13, color: AppColors.textSecondary, height: 1.4),
+              ),
+              if (verdict != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  verdict.$1,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: verdict.$2),
+                ),
+              ],
+              if (moment.timeSpentSec != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Spent ${moment.timeSpentSec!.round()}s here.',
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.textSecondary),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static (String, Color)? _verdictLabel(TimeVerdict v) => switch (v) {
+        TimeVerdict.blindSpot => ('Moved fast here.', Colors.red.shade600),
+        TimeVerdict.wasted => ('Long think.', Colors.orange.shade700),
+        TimeVerdict.productiveThink =>
+          ('Thought, then banked it.', Colors.green.shade700),
+        TimeVerdict.normal => null,
+      };
 
   // ---------------------------------------------------------------------------
   // Variation block — recursive, renders each move individually
@@ -725,6 +820,54 @@ class _StudyNotationState extends ConsumerState<StudyNotation> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Marks a move the critical-moment pass flagged.
+///
+/// Deliberately not shaped like the quality badge next to it: quality is a
+/// judgement on the move played, criticality is a property of the *position*,
+/// and a move can be both critical and correct. A filled `??` pill next to an
+/// outlined target would read as two grades of the same thing.
+class _CriticalMomentBadge extends StatelessWidget {
+  final CriticalMoment moment;
+  final VoidCallback onTap;
+
+  const _CriticalMomentBadge({required this.moment, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Colors.deepPurple.shade400;
+    return GestureDetector(
+      // Swallow the tap so opening the detail sheet doesn't also navigate.
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+          decoration: BoxDecoration(
+            border: Border.all(color: color, width: 1),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.crisis_alert, size: 10, color: color),
+              const SizedBox(width: 3),
+              Text(
+                '${moment.criticalityPercentile.round()}',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Wraps a sub-variation widget so it forces a full-width line break in Wrap.
 class _SubVariationWidget extends StatelessWidget {
   final Widget child;
@@ -740,8 +883,14 @@ class _MovePair {
   final int number;
   final String whiteSan;
   final MoveNode whiteNode;
+
+  /// Mainline half-move index of the white move — the key critical moments are
+  /// reported under.
+  final int whitePly;
+
   final String? blackSan;
   final MoveNode? blackNode;
+  final int? blackPly;
   final List<MoveNode> whiteVariations;
   final List<MoveNode> blackVariations;
 
@@ -749,8 +898,10 @@ class _MovePair {
     required this.number,
     required this.whiteSan,
     required this.whiteNode,
+    required this.whitePly,
     this.blackSan,
     this.blackNode,
+    this.blackPly,
     this.whiteVariations = const [],
     this.blackVariations = const [],
   });

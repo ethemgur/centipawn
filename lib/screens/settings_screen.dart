@@ -25,8 +25,11 @@ class SettingsScreen extends ConsumerWidget {
           _SectionHeader('Analysis'),
           ListTile(
             leading: const Icon(Icons.speed_outlined),
-            title: const Text('Review depth'),
-            subtitle: Text('Depth $depth — higher is stronger but slower'),
+            title: const Text('Engine depth'),
+            subtitle: Text(
+              'Depth $depth — used for live analysis, game review, and '
+              'critical moments. Higher is stronger but slower.',
+            ),
             trailing: SizedBox(
               width: 160,
               child: Slider(
@@ -155,7 +158,8 @@ class SettingsScreen extends ConsumerWidget {
           ListTile(
             leading: const Icon(Icons.bolt_outlined),
             title: const Text('Engine'),
-            subtitle: const Text('Stockfish — runs locally on device'),
+            subtitle: const Text(
+                'Stockfish — runs locally on device, no cloud evaluation'),
           ),
           ListTile(
             leading: const Icon(Icons.storage_outlined),

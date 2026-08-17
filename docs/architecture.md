@@ -30,24 +30,35 @@ gameListProvider ──(user taps a game)──► selectedGameProvider
                                        moveTreeProvider ◄── DatabaseService.loadMoveTree
                                               │
                                               ▼
-                                       activeNodeProvider ──► engineProvider.analyzePosition(fen)
+                                       activeNodeProvider ──► engineProvider.analyzePosition(
+                                              │                  fen, multiPv: 3, maxDepth: …)
                                               │                        │
                                               │                        ▼
                                               │              engineEvaluationProvider (stream)
                                               │                        │
                                               ├──► cloudEvalProvider ──┤
-                                              │        (one-shot)      ▼
+                                              │      (off: kUseCloudEval) ▼
                                               │                combinedEvalProvider ──► board arrows,
                                               │                (FEN-matched only)       eval bar,
                                               │                                         analysis box
                                               │
                                               ▼
                                         reviewProvider ──► writes evals onto MoveNodes,
-                                              │            persists tree + accuracies
+                                              │            persists tree + accuracies,
+                                              │            fills analysisCacheProvider
                                               ▼
-                                     criticalMomentsProvider ──► ranked decision points
-                                       (needs runSearch; web runs shallower)
+                                     criticalMomentsProvider ──► moments, badged in the notation
+                                       (reads the same cache; web runs shallower)
+                                              │
+                                              ▼
+                                     criticalMomentsByPlyProvider (ply → moment)
 ```
+
+Everything analysis-related is sized by two constants next to `engineProvider`:
+`kAnalysisMultiPv` (3 — the width the suggested-lines box shows *and* the width
+critical-moment scoring needs, so one search serves both) and `analysisDepth(ref)`
+(the settings slider, capped at 12 on web). `kUseCloudEval` is false; see
+[evaluation.md](evaluation.md#cloud-eval-is-off).
 
 Supporting state: `engineRunningProvider` (live analysis on/off, default **true**;
 the critical-moment pass toggles it off for its duration, since it and live
@@ -58,7 +69,13 @@ analysis share one engine process),
 
 `reviewDepthProvider` and `myNamesProvider` are the only ones backed by
 `SharedPreferences`; both load asynchronously in `build()` and emit a default first
-(depth `16`, empty name list).
+(depth `16`, empty name list). Despite the name, `reviewDepthProvider` now backs
+*all* analysis — live, review, and critical moments — and is surfaced in settings
+as "Engine depth"; read it through `analysisDepth(ref)` so the web cap applies.
+
+`analysisCacheProvider` is a plain `Provider<SearchCache>` holding the searches
+from the last analysis run, so the review and critical moments don't search the
+same positions twice. It is cleared at the start of `startReview`.
 
 ## Opening a game
 

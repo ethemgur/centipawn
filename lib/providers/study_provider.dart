@@ -253,6 +253,43 @@ final engineProvider = Provider<EngineService>((ref) {
   return service;
 });
 
+/// Lichess cloud eval is **off**: analysis is Stockfish-only for now.
+///
+/// Flip this back to true to restore it — `CloudEvalService` and
+/// [cloudEvalProvider] are left intact so that is a one-line change. The cloud
+/// answers faster for cached positions, but it reports neither MultiPV nor the
+/// per-depth best move, so it cannot feed critical-moment detection; keeping
+/// one engine as the single source makes the numbers consistent everywhere.
+const bool kUseCloudEval = false;
+
+/// Lines the engine reports, for live analysis and for the analysis sweep.
+///
+/// Three is what the suggested-lines box shows, and it is also the width
+/// critical-moment scoring needs (it reads up to `pvs[2]`), so one search at
+/// this width serves both.
+const int kAnalysisMultiPv = 3;
+
+/// Search depth for everything: live analysis, the review, and critical
+/// moments. Comes from the settings slider, capped on web because the
+/// single-threaded wasm build is roughly an order of magnitude slower.
+///
+/// The web cap is [kShallowDepthWeb] — the depth a browser run measured as the
+/// most a full-game sweep can afford. It is the same number for the same
+/// reason, so the two must not drift apart.
+int analysisDepth(Ref ref) {
+  final requested = ref.read(reviewDepthProvider);
+  return kIsWeb ? math.min(requested, kShallowDepthWeb) : requested;
+}
+
+/// Search results captured during the last analysis run.
+///
+/// The review and critical-moment detection need the *same* positions searched
+/// at the same depth and width, so the review fills this and critical moments
+/// reads it — one Stockfish pass instead of two. Keyed by
+/// `(fen, depth, multiPv)`, so a mismatch on any of those degrades to a real
+/// search rather than a wrong answer.
+final analysisCacheProvider = Provider<SearchCache>((ref) => SearchCache());
+
 final engineEvaluationProvider = StreamProvider<PositionEvals>((ref) {
   return ref.watch(engineProvider).evaluationStream;
 });
@@ -262,11 +299,13 @@ final engineEvaluationProvider = StreamProvider<PositionEvals>((ref) {
 /// network failure so callers can fall back gracefully.
 final cloudEvalProvider =
     FutureProvider.autoDispose<PositionEvals>((ref) async {
+  if (!kUseCloudEval) return PositionEvals.none;
   final node = ref.watch(activeNodeProvider);
   final isRunning = ref.watch(engineRunningProvider);
   if (!isRunning || node == null) return PositionEvals.none;
 
-  final result = await CloudEvalService.evaluate(node.fen, multiPv: 3);
+  final result =
+      await CloudEvalService.evaluate(node.fen, multiPv: kAnalysisMultiPv);
   return result == null ? PositionEvals.none : PositionEvals(node.fen, result);
 });
 
@@ -316,7 +355,11 @@ class EngineRunningNotifier extends Notifier<bool> {
     if (state) {
       final current = ref.read(activeNodeProvider);
       if (current != null) {
-        ref.read(engineProvider).analyzePosition(current.fen);
+        ref.read(engineProvider).analyzePosition(
+              current.fen,
+              multiPv: kAnalysisMultiPv,
+              maxDepth: analysisDepth(ref),
+            );
       }
     } else {
       ref.read(engineProvider).stop();
@@ -338,7 +381,11 @@ class ActiveNodeNotifier extends Notifier<MoveNode?> {
     final root = ref.read(moveTreeProvider).root;
     Future.microtask(() {
       if (ref.read(engineRunningProvider)) {
-        ref.read(engineProvider).analyzePosition(root.fen);
+        ref.read(engineProvider).analyzePosition(
+              root.fen,
+              multiPv: kAnalysisMultiPv,
+              maxDepth: analysisDepth(ref),
+            );
       }
     });
     return root;
@@ -347,7 +394,11 @@ class ActiveNodeNotifier extends Notifier<MoveNode?> {
   void setNode(MoveNode? node) {
     state = node;
     if (node != null && ref.read(engineRunningProvider)) {
-      ref.read(engineProvider).analyzePosition(node.fen);
+      ref.read(engineProvider).analyzePosition(
+            node.fen,
+            multiPv: kAnalysisMultiPv,
+            maxDepth: analysisDepth(ref),
+          );
     }
   }
 
@@ -585,32 +636,62 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
     return null;
   }
 
-  /// Tries the Lichess cloud-eval cache first; falls back to the local engine.
+  /// Evaluates one position with Stockfish, recording the full search.
   ///
-  /// Cloud results are typically depth 30–99 and arrive in < 100 ms for cached
-  /// positions (most openings and common middlegame positions). If the cloud
-  /// returns nothing — position not cached, network down, or depth too shallow
-  /// — we evaluate locally at [localDepth].
+  /// The search runs at [kAnalysisMultiPv] lines rather than one, and its raw
+  /// [SearchResult] goes into [analysisCacheProvider]. That is what lets
+  /// critical-moment detection skip its own shallow sweep entirely: Stage A
+  /// needs exactly these positions at exactly this depth and width, so every
+  /// lookup there is a cache hit and the game is searched once, not twice.
   ///
-  /// Returns null when neither source can answer: on web there is no local
-  /// Stockfish, and its stub returns a 0.00 score that would otherwise be
-  /// mistaken for a dead-equal position and produce huge phantom eval swings.
+  /// Cloud eval is bypassed while [kUseCloudEval] is false. It answers faster
+  /// for cached positions but reports a single line and no per-depth best move,
+  /// so it cannot fill the cache — mixing the two would leave the sweep to
+  /// re-search whatever the cloud answered.
+  ///
+  /// Returns null when nothing could evaluate the position — never a 0.00
+  /// placeholder, which reads as dead-equal and fabricates huge swings on the
+  /// surrounding moves.
   Future<EngineEvaluation?> _fetchEval(
     EngineService engine,
     String fen, {
-    required int localDepth,
+    required int depth,
   }) async {
     final terminal = _terminalEval(fen);
     if (terminal != null) return terminal;
 
-    final cloud = await CloudEvalService.evaluateBest(fen);
-    if (cloud != null) return cloud;
+    if (kUseCloudEval) {
+      final cloud = await CloudEvalService.evaluateBest(fen);
+      if (cloud != null) return cloud;
+    }
 
-    // Loads the engine on first use. On web this is where the review stops
-    // leaving cloud-miss positions unevaluated — at the cost of a real search
-    // per miss, which is why the web review depth is capped below.
+    // Loads the engine on first use; on web this fetches the wasm module.
     if (!await engine.ensureReady()) return null;
-    return engine.evaluatePosition(fen, depth: localDepth);
+
+    final cache = ref.read(analysisCacheProvider);
+    var result = cache.get(fen, depth, kAnalysisMultiPv);
+    if (result == null) {
+      result =
+          await engine.runSearch(fen, depth: depth, multiPv: kAnalysisMultiPv);
+      cache.put(fen, depth, kAnalysisMultiPv, result);
+    }
+    return _toEvaluation(result);
+  }
+
+  /// Top line of a search as an [EngineEvaluation].
+  ///
+  /// Note the unit change: [PvLine.scoreCp] is raw centipawns, while
+  /// [EngineEvaluation.scoreCp] is pawns. Dropping the `/ 100` here makes every
+  /// eval read 100x too large.
+  static EngineEvaluation? _toEvaluation(SearchResult result) {
+    if (result.pvs.isEmpty) return null;
+    final best = result.pvs.first;
+    return EngineEvaluation(
+      scoreCp: best.scoreCp / 100.0,
+      mate: best.mateIn,
+      pv: best.movesUci,
+      depth: result.depth,
+    );
   }
 
   /// Restore progress state from a previously reviewed game — called after
@@ -646,10 +727,11 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
       ref.read(engineRunningProvider.notifier).toggle();
     }
 
-    // The web engine is single-threaded wasm; at the slider's default of 16 a
-    // game with many cloud misses would sit for minutes with nothing visible.
-    final requestedDepth = ref.read(reviewDepthProvider);
-    final depth = kIsWeb ? math.min(requestedDepth, 12) : requestedDepth;
+    final depth = analysisDepth(ref);
+
+    // Start from an empty cache so a re-analysis after an edit re-searches
+    // rather than replaying results for a tree that has since changed.
+    ref.read(analysisCacheProvider).clear();
 
     state = ReviewProgress(
       total: mainline.length + 1,
@@ -661,7 +743,7 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
     // the position — every eval-derived number stays null until a real
     // evaluation arrives, so nothing is measured against a guess.
     final rootWhiteToMove = _isWhiteToMove(tree.root.fen);
-    final rootEval = await _fetchEval(engine, tree.root.fen, localDepth: depth);
+    final rootEval = await _fetchEval(engine, tree.root.fen, depth: depth);
     int? prevCpWhite = rootEval == null
         ? null
         : _toCpWhitePerspective(rootEval, isWhiteToMove: rootWhiteToMove);
@@ -704,7 +786,7 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
           prevCpWhite == null ? null : prevCpWhite / 100.0;
       final parentMateWhite = prevBestMateWhite;
 
-      final eval = await _fetchEval(engine, node.fen, localDepth: depth);
+      final eval = await _fetchEval(engine, node.fen, depth: depth);
 
       node.bestMoveUci = parentBestUci;
       node.bestMoveEval = parentEvalWhite;
@@ -854,7 +936,11 @@ class ReviewNotifier extends Notifier<ReviewProgress> {
     }
 
     // Restore standard engine analysis on the last position.
-    engine.analyzePosition(mainline.last.fen);
+    engine.analyzePosition(
+      mainline.last.fen,
+      multiPv: kAnalysisMultiPv,
+      maxDepth: analysisDepth(ref),
+    );
 
     // Refresh notation so quality labels appear without a re-click.
     ref.read(moveTreeProvider.notifier).refresh();
@@ -998,7 +1084,8 @@ class CriticalMomentsState {
     this.deepDepth = kDeepDepth,
   });
 
-  /// True when this ran at the reduced web depths.
+  /// True when this ran shallower than the depths the scoring weights were
+  /// tuned at — on web, or with the settings slider turned down.
   bool get isReducedDepth =>
       shallowDepth < kShallowDepth || deepDepth < kDeepDepth;
 
@@ -1046,16 +1133,27 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
     final wasRunning = ref.read(engineRunningProvider);
     if (wasRunning) ref.read(engineRunningProvider.notifier).toggle();
 
-    // Web runs shallower — single-threaded wasm at native depths would take
-    // minutes. Recorded in state so a web report is never mistaken for native.
-    final shallowDepth = kIsWeb ? kShallowDepthWeb : kShallowDepth;
-    final deepDepth = kIsWeb ? kDeepDepthWeb : kDeepDepth;
+    // Stage A runs at the *review's* depth and width, not at its own tuned
+    // constants, because that is what makes it free: the review has already
+    // searched every position Stage A needs — `ply.fenBefore` is the root plus
+    // `mainline[0..n-2].fen` — so with matching (depth, multiPv) every Stage A
+    // lookup hits `analysisCacheProvider` and the sweep costs nothing. A
+    // mismatch on either value is not wrong, just slow: the cache misses and
+    // Stage A searches the whole game again.
+    final shallowDepth = analysisDepth(ref);
+    final shallowMultiPv = kAnalysisMultiPv;
+
+    // Stage B is the pass that still costs real time, on flagged plies only.
+    // Web runs it shallower — single-threaded wasm at the native depth would
+    // take minutes. It must stay clear of the shallow depth or "deeper look"
+    // means nothing, which a low settings slider would otherwise cause.
+    final deepDepth =
+        math.max(kIsWeb ? kDeepDepthWeb : kDeepDepth, shallowDepth + 4);
     // MultiPV width, not depth, turned out to be the dominant cost on web: a
     // depth-20 MultiPV-5 search measured 9-22s each in a browser, and a sharp
     // game flags most plies for it — several minutes for one game. Scoring
     // never reads past pvs[2], so narrowing to 3 lines on web costs nothing in
     // fidelity. See critical_types.dart for the measurement.
-    final shallowMultiPv = kIsWeb ? kShallowMultiPvWeb : kShallowMultiPv;
     final deepMultiPv = kIsWeb ? kDeepMultiPvWeb : kDeepMultiPv;
 
     state = CriticalMomentsState(
@@ -1072,6 +1170,7 @@ class CriticalMomentsNotifier extends Notifier<CriticalMomentsState> {
         mainline,
         side,
         initialFen: tree.root.fen,
+        cache: ref.read(analysisCacheProvider),
         shallowDepth: shallowDepth,
         deepDepth: deepDepth,
         shallowMultiPv: shallowMultiPv,
@@ -1119,3 +1218,18 @@ final criticalMomentsProvider =
     NotifierProvider<CriticalMomentsNotifier, CriticalMomentsState>(
   CriticalMomentsNotifier.new,
 );
+
+/// The reported moments keyed by mainline ply index (0 = White's first move),
+/// so the notation can badge a move without re-deriving the ranking.
+///
+/// [CriticalMoment.ply] is the index `PlyBuilder` assigned while walking the
+/// mainline, which is the same order the notation renders in — so this is a
+/// direct lookup rather than a FEN or node match. Node identity would be the
+/// wrong key here: `MoveNode` is `Equatable` over mutable fields, so its hash
+/// changes the moment a review writes an evaluation back into the tree.
+final criticalMomentsByPlyProvider =
+    Provider.autoDispose<Map<int, CriticalMoment>>((ref) {
+  final report = ref.watch(criticalMomentsProvider).report;
+  if (report == null) return const {};
+  return {for (final m in report.moments) m.ply: m};
+});
